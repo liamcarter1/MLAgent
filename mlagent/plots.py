@@ -243,7 +243,7 @@ def present(fig: Figure, plots_dir: Path, name: str) -> Path:
 
 
 def _frame(ax, title: str) -> None:
-    ax.set_title(title, color=INK, fontsize=10)
+    ax.set_title(title, color=INK, fontsize=10, loc="left")
     ax.tick_params(colors=INK_2, labelsize=8)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -316,10 +316,12 @@ def roc_pr_curves(y_true, y_proba, labels: list[str]) -> Figure:
         curves = [(1, p[:, 1], labels[1])]
     else:
         curves = [(k, p[:, k], labels[k]) for k in range(min(n, len(SERIES)))]
+    drawn = 0
     for (k, score, label), colour in zip(curves, SERIES, strict=False):
         positive = (y == k).astype(int)
         if positive.sum() in (0, len(positive)):
             continue
+        drawn += 1
         fpr, tpr, _ = roc_curve(positive, score)
         ax_roc.plot(fpr, tpr, color=colour, linewidth=2, label=label)
         precision, recall, _ = precision_recall_curve(positive, score)
@@ -332,7 +334,7 @@ def roc_pr_curves(y_true, y_proba, labels: list[str]) -> Figure:
     _frame(ax_pr, "Precision-recall curve")
     ax_pr.set_xlabel("recall", color=INK_2, fontsize=8)
     ax_pr.set_ylabel("precision", color=INK_2, fontsize=8)
-    if len(curves) > 1:
+    if drawn > 1:
         _legend(ax_roc)
         _legend(ax_pr)
     fig.tight_layout()

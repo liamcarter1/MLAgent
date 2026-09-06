@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from matplotlib.figure import Figure
 
@@ -18,7 +20,7 @@ def test_training_curves_two_panels_with_legends():
     for ax in fig.axes:
         assert ax.get_legend() is not None
         assert len(ax.lines) == 2
-    assert "accuracy" in fig.axes[1].get_title()
+    assert "accuracy" in fig.axes[1].get_title(loc="left")
     plots.plt.close(fig)
 
 
@@ -49,6 +51,17 @@ def test_roc_pr_binary_has_no_legend_multiclass_has_one():
     fig = plots.roc_pr_curves(y3.tolist(), p3.tolist(), ["a", "b", "c"])
     assert fig.axes[0].get_legend() is not None
     assert len(fig.axes[0].lines) >= 3
+    plots.plt.close(fig)
+
+
+def test_roc_pr_degenerate_labels_draw_no_legend():
+    y_true = [0, 0, 0, 0]
+    y_proba = [[0.8, 0.1, 0.1], [0.7, 0.2, 0.1], [0.6, 0.3, 0.1], [0.5, 0.4, 0.1]]
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        fig = plots.roc_pr_curves(y_true, y_proba, ["a", "b", "c"])
+        assert fig.axes[0].get_legend() is None
+        assert len(w) == 0
     plots.plt.close(fig)
 
 
