@@ -1,3 +1,5 @@
+import pytest
+
 from mlagent.llm import FakeLLM
 from mlagent.spec import Spec
 from mlagent.stages.base import StageContext
@@ -76,3 +78,10 @@ def test_is_complete_false_for_corrupt_spec(project):
     project.write_json("spec.json", {"goal": "only"})
     ctx, _ = make_ctx(project, FakeLLM([]), [])
     assert IntakeStage().is_complete(ctx) is False
+
+
+def test_is_complete_false_for_truncated_spec_json(project):
+    (project.root / "spec.json").write_text('{"goal": "cats", "task_type": ', encoding="utf-8")
+    ctx, _ = make_ctx(project, FakeLLM([]), [])
+    with pytest.warns(UserWarning, match="spec.json"):
+        assert IntakeStage().is_complete(ctx) is False

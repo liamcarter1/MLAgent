@@ -13,8 +13,9 @@ class Orchestrator:
 
     def _state(self) -> dict:
         state = self.ctx.project.read_json(config.STATE_FILE, default=None)
-        if state is None:
+        if not isinstance(state, dict) or not isinstance(state.get("completed"), list):
             return {"completed": [], "current": None, "forced": []}
+        state.setdefault("current", None)
         state.setdefault("forced", [])
         return state
 

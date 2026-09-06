@@ -70,3 +70,11 @@ def test_stage_with_artifact_but_no_state_is_skipped(project):
     orch = Orchestrator(make_ctx(project), [a, b])
     assert orch.run() == ["b"]
     assert a.runs == 0
+
+
+def test_non_dict_state_json_treated_as_empty_state(project):
+    project.write_json("state.json", [])
+    a, b = RecordingStage("a"), RecordingStage("b")
+    orch = Orchestrator(make_ctx(project), [a, b])
+    assert orch.run() == ["a", "b"]
+    assert orch.completed() == ["a", "b"]

@@ -7,31 +7,29 @@ from collections.abc import Callable
 from pathlib import Path
 
 from mlagent.llm import LLM, ask_text
+from mlagent.project import read_json_file, write_json_file
 from mlagent.prompts_io import load_prompt
-from mlagent.ui.render import display_message
+from mlagent.ui.render import EXPLAIN_CALLBACK_NAME, display_message
 
 
 class Glossary:
     def __init__(self, path: Path):
         self.path = Path(path)
-        self._data: dict[str, str] = {}
-        if self.path.exists():
-            self._data = json.loads(self.path.read_text(encoding="utf-8"))
+        self._data: dict[str, str] = read_json_file(self.path, default={})
 
     def get(self, term: str) -> str | None:
         return self._data.get(term.strip().lower())
 
     def set(self, term: str, text: str) -> None:
         self._data[term.strip().lower()] = text
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._data, indent=2, sort_keys=True), encoding="utf-8")
+        write_json_file(self.path, self._data)
 
     def terms(self) -> list[str]:
         return sorted(self._data)
 
 
 class Explainer:
-    CALLBACK_NAME = "mlagent.explain"
+    CALLBACK_NAME = EXPLAIN_CALLBACK_NAME
 
     def __init__(
         self,
@@ -61,7 +59,10 @@ class Explainer:
         self.display(f"### {term}\n\n{text}")
 
     def _on_click(self, term: str) -> None:
-        self.show(term)
+        try:
+            self.show(term)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not raised
+            self.display(f"Couldn't explain **{term}**: {exc}")
 
     def register_colab_callback(self) -> bool:
         try:
