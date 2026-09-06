@@ -32,13 +32,21 @@ def test_load_table_by_extension(tmp_path):
         drive.load_table(tmp_path / "t.xyz")
 
 
+def test_load_table_rejects_xls_files(tmp_path):
+    xls = tmp_path / "t.xls"
+    xls.write_bytes(b"")
+    with pytest.raises(ValueError):
+        drive.load_table(xls)
+
+
 class FakeApi:
-    def __init__(self):
+    def __init__(self, skip_id=False):
         self.calls = []
+        self.skip_id = skip_id
 
     def list_datasets(self, **kwargs):
         self.calls.append(kwargs)
-        return [
+        items = [
             SimpleNamespace(
                 id="org/churn", downloads=1200, likes=5,
                 tags=["task:tabular", "csv"], description=None
@@ -48,6 +56,11 @@ class FakeApi:
                 description="Some data"
             ),
         ]
+        if self.skip_id:
+            items.append(SimpleNamespace(
+                downloads=100, likes=3, tags=[], description="no id"
+            ))
+        return items
 
 
 def test_search_datasets_maps_results():
@@ -56,6 +69,13 @@ def test_search_datasets_maps_results():
     assert api.calls[0]["search"] == "churn" and api.calls[0]["limit"] == 2
     assert results[0] == hf.HFDataset(id="org/churn", downloads=1200, likes=5, description="csv")
     assert results[1].downloads == 0 and results[1].description == "Some data"
+
+
+def test_search_datasets_skips_items_without_id():
+    api = FakeApi(skip_id=True)
+    results = hf.search_datasets("test", api=api)
+    assert len(results) == 2
+    assert all(r.id for r in results)
 
 
 def test_load_tabular_with_split_and_dict_fallback():
@@ -76,3 +96,15 @@ def test_load_tabular_with_split_and_dict_fallback():
         return DictLike(validation=SimpleNamespace(to_pandas=lambda: frame))
 
     assert hf.load_tabular("x/y", loader=loader_dict).equals(frame)
+
+
+def test_load_tabular_chains_exceptions_on_fallback():
+    def loader_chains(dataset_id, **kwargs):
+        if "split" in kwargs:
+            raise ValueError("bad split")
+        raise RuntimeError("no such dataset")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        hf.load_tabular("x/y", loader=loader_chains)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "bad split"

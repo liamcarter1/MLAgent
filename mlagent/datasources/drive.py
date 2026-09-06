@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-TABLE_EXTS = (".csv", ".tsv", ".parquet", ".xlsx", ".xls")
+TABLE_EXTS = (".csv", ".tsv", ".parquet", ".xlsx")
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".ipynb_checkpoints"}
 
 
@@ -45,8 +45,8 @@ def load_table(path: Path) -> pd.DataFrame:
         return pd.read_csv(path, sep="\t")
     if suffix == ".parquet":
         return pd.read_parquet(path)
-    if suffix in (".xlsx", ".xls"):
+    if suffix == ".xlsx":
         return pd.read_excel(path)
     raise ValueError(
-        f"unsupported file type {suffix!r}; use CSV, TSV, Parquet, or Excel"
+        f"unsupported file type {suffix!r}; use CSV, TSV, Parquet, or Excel (.xlsx)"
     )

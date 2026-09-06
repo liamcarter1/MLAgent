@@ -27,13 +27,16 @@ def search_datasets(
     )
     out: list[HFDataset] = []
     for item in results:
+        dataset_id = getattr(item, "id", None)
+        if dataset_id is None:
+            continue
         description = getattr(item, "description", None) or ""
         if not description:
             tags = getattr(item, "tags", None) or []
             description = ", ".join(t for t in tags if ":" not in t)
         out.append(
             HFDataset(
-                id=str(item.id),
+                id=str(dataset_id),
                 downloads=int(getattr(item, "downloads", 0) or 0),
                 likes=int(getattr(item, "likes", 0) or 0),
                 description=description[:120],
@@ -52,8 +55,11 @@ def load_tabular(
     kwargs = {"name": config} if config else {}
     try:
         ds = loader(dataset_id, split=split, **kwargs)
-    except ValueError:
-        ds = loader(dataset_id, **kwargs)
+    except ValueError as first:
+        try:
+            ds = loader(dataset_id, **kwargs)
+        except Exception as second:
+            raise second from first
     if hasattr(ds, "keys") and not hasattr(ds, "to_pandas"):
         key = "train" if "train" in ds else next(iter(ds.keys()))
         ds = ds[key]
