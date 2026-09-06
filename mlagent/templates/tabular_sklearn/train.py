@@ -40,6 +40,7 @@ EVAL_TEST_FILE = "eval_test.json"
 CHECKPOINT = Path("checkpoints") / "best.joblib"
 HIGHER_IS_BETTER = {"accuracy": True, "f1": True, "r2": True, "rmse": False, "mae": False}
 DEFAULT_METRIC = {"tabular_classification": "accuracy", "tabular_regression": "rmse"}
+EPS = 1e-12
 
 
 def read_json(path: Path, default=None):
@@ -76,6 +77,8 @@ def full_proba(model, X, n_classes: int) -> np.ndarray:
     proba = model.predict_proba(X)
     out = np.zeros((len(X), n_classes), dtype=float)
     out[:, np.asarray(model.classes_, dtype=int)] = proba
+    out = np.clip(out, EPS, None)
+    out /= out.sum(axis=1, keepdims=True)
     return out
 
 
@@ -116,6 +119,28 @@ def metric_for(project_dir: Path, task_type: str) -> str:
     return str(spec.get("metric") or DEFAULT_METRIC[task_type])
 
 
+def empty_metrics() -> dict:
+    """Return a metrics dict with all required keys and placeholder values."""
+    return {
+        "status": "running",
+        "task_type": None,
+        "metric": None,
+        "higher_is_better": None,
+        "config": None,
+        "classes": None,
+        "n_train": None,
+        "n_val": None,
+        "n_test": None,
+        "epochs": [],
+        "best_epoch": None,
+        "best_val_metric": None,
+        "stopped_early": False,
+        "error": None,
+        "seconds": None,
+        "seconds_per_epoch": None,
+    }
+
+
 def train(project_dir: Path, dry_run: bool = False) -> dict:
     config = read_json(project_dir / CONFIG_FILE, default={}) or {}
     data = load_data(project_dir, config)
@@ -131,8 +156,8 @@ def train(project_dir: Path, dry_run: bool = False) -> dict:
     config = {**config, "iters_per_epoch": iters}
     metrics_path = None if dry_run else project_dir / METRICS_FILE
 
-    metrics = {
-        "status": "running",
+    metrics = empty_metrics()
+    metrics.update({
         "task_type": task_type,
         "metric": metric,
         "higher_is_better": higher,
@@ -141,14 +166,7 @@ def train(project_dir: Path, dry_run: bool = False) -> dict:
         "n_train": int(len(data["X_train"])),
         "n_val": int(len(data["X_val"])),
         "n_test": int(len(data["X_test"])),
-        "epochs": [],
-        "best_epoch": None,
-        "best_val_metric": None,
-        "stopped_early": False,
-        "error": None,
-        "seconds": None,
-        "seconds_per_epoch": None,
-    }
+    })
 
     def save() -> None:
         if metrics_path is not None:
@@ -253,9 +271,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - record any failure for the runner
         traceback.print_exc()
         if not args.eval_test and not args.dry_run:
-            existing = read_json(project_dir / METRICS_FILE, default=None) or {
-                "status": "running", "epochs": []
-            }
+            read_metrics = read_json(project_dir / METRICS_FILE, default=None) or {}
+            existing = {**empty_metrics(), **read_metrics}
             existing["status"] = "failed"
             existing["error"] = f"{type(exc).__name__}: {exc}"
             write_json(project_dir / METRICS_FILE, existing)

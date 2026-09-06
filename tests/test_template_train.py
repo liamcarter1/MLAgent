@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import numpy as np
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 TEMPLATE = Path("mlagent/templates/tabular_sklearn").resolve()
 CODE_FILES = ("data.py", "model.py", "train.py")
@@ -93,6 +97,11 @@ def test_failure_is_recorded_in_metrics(clean_project):
     metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["status"] == "failed"
     assert "missing_column" in metrics["error"]
+    required_keys = {
+        "task_type", "metric", "config", "epochs", "best_epoch", "best_val_metric",
+        "seconds_per_epoch"
+    }
+    assert set(metrics) >= required_keys
 
 
 def test_eval_test_without_checkpoint_fails_clearly(clean_project):
@@ -100,3 +109,29 @@ def test_eval_test_without_checkpoint_fails_clearly(clean_project):
     proc = run(root, "--eval-test")
     assert proc.returncode == 1
     assert "checkpoint" in (proc.stdout + proc.stderr).lower()
+
+
+def test_full_proba_handles_class_absent_from_training():
+    template_dir = Path("mlagent/templates/tabular_sklearn").resolve()
+    sys.path.insert(0, str(template_dir))
+    try:
+        spec = importlib.util.spec_from_file_location("train_module", template_dir / "train.py")
+        train_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(train_module)
+
+        X = np.random.default_rng(0).random((20, 2))
+        y = np.array([0, 1] * 10)
+        model = HistGradientBoostingClassifier(max_iter=2, random_state=0)
+        model.fit(X, y)
+
+        result = train_module.evaluate(
+            model, X, y, "tabular_classification", "accuracy", n_classes=3
+        )
+
+        assert np.isfinite(result["loss"]), "loss should be finite"
+        y_proba = np.array(result["y_proba"])
+        assert y_proba.shape == (20, 3), "proba should have 20 rows, 3 classes"
+        row_sums = y_proba.sum(axis=1)
+        assert np.allclose(row_sums, 1.0, atol=1e-6), "proba rows should sum to 1"
+    finally:
+        sys.path.pop(0)
