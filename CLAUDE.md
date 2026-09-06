@@ -27,7 +27,7 @@ Tests never hit the network: anything that talks to Claude takes an `LLM` and te
 - User questions go through the `Questioner` protocol (`ui/questions.py`). In Colab this is `input()`-based because widget clicks cannot block a running cell.
 - Assistant text uses `[[term]]` markup. `ui/render.py` turns it into clickable spans; in Colab a click invokes the registered `mlagent.explain` callback, and `ui/explain.py` returns a cached, project-contextual explanation stored in `glossary.json`.
 - System prompts live in `mlagent/prompts/*.md` and are loaded with `prompts_io.load_prompt`; never inline prompts in Python.
-- `mlagent/colab.py` is the notebook's entry point (`setup`, `start`, `explain`). It must stay importable outside Colab.
+- `mlagent/colab.py` is the notebook's entry point (`setup`, `make_context`, `start`, `explain`). It must stay importable outside Colab.
 - Per-project files live under `<drive_root>/projects/<name>/` (see `project.py` for the layout).
 
 ## Conventions
