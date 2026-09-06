@@ -13,6 +13,10 @@ PROJECTS_DIRNAME: str = "projects"
 SPEC_FILE = "spec.json"
 STATE_FILE = "state.json"
 GLOSSARY_FILE = "glossary.json"
+CONFIG_FILE = "config.json"
+RUNS_FILE = "runs.jsonl"
+METRICS_FILE = "metrics.json"
+REPORT_FILE = "report.md"
 
 # Colab compute-unit consumption per hour by GPU. Conservative defaults;
 # the cost gate asks the user to confirm the live figure from Colab's Resources panel.
