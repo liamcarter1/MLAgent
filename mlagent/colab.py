@@ -73,14 +73,16 @@ def make_context(project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LL
     project = Project(projects / project_name)
     project.ensure_dirs()
     llm = llm or AnthropicLLM()
-    explainer = Explainer(
+    ctx = StageContext(project=project, llm=llm, questioner=ConsoleQuestioner(),
+                       explainer=None, display=display_message)
+    ctx.explainer = Explainer(
         llm=llm,
         glossary=Glossary(project.glossary_path),
-        context_provider=lambda: _context_snapshot(project),
+        # Reads ctx.stage at call time, not at construction time, so it reflects
+        # whichever stage the orchestrator is currently running.
+        context_provider=lambda: _context_snapshot(project, ctx.stage),
         display=display_message,
     )
-    ctx = StageContext(project=project, llm=llm, questioner=ConsoleQuestioner(),
-                       explainer=explainer, display=display_message)
     _LAST_CTX = ctx
     return ctx
 

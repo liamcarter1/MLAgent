@@ -19,6 +19,7 @@ class StageContext:
     questioner: Questioner
     explainer: Explainer | None
     display: Callable[[str], None]
+    stage: str = ""
 
 
 class Stage(Protocol):
