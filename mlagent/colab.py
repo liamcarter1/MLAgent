@@ -11,6 +11,8 @@ from mlagent.llm import LLM, AnthropicLLM
 from mlagent.orchestrator import Orchestrator
 from mlagent.project import Project
 from mlagent.stages.base import StageContext
+from mlagent.stages.clean import CleanStage
+from mlagent.stages.data import DataStage
 from mlagent.stages.intake import IntakeStage
 from mlagent.ui.explain import Explainer, Glossary
 from mlagent.ui.questions import ConsoleQuestioner
@@ -64,6 +66,10 @@ def _context_snapshot(project: Project, stage_name: str = "") -> dict:
         "stage": stage_name,
         "spec": project.read_json(config.SPEC_FILE),
         "state": project.read_json(config.STATE_FILE),
+        "data_meta": project.read_json("data_meta.json"),
+        "audit_issue_kinds": [
+            i.get("kind") for i in (project.read_json("audit.json") or {}).get("issues", [])
+        ],
     }
 
 
@@ -94,7 +100,7 @@ def start(
 ) -> Orchestrator:
     ctx = make_context(project_name, drive_root=drive_root, llm=llm)
     ctx.explainer.register_colab_callback()
-    return Orchestrator(ctx, [IntakeStage()])
+    return Orchestrator(ctx, [IntakeStage(), DataStage(), CleanStage()])
 
 
 def explain(term: str, refresh: bool = False) -> None:

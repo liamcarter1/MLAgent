@@ -15,6 +15,7 @@ python -m pytest tests/test_intake.py -v            # one file
 python -m pytest tests/test_intake.py::test_name -v # one test
 ruff check .                           # lint
 python scripts/build_notebook.py       # regenerate notebooks/ML_Training_Agent.ipynb
+python -m pytest -W error::DeprecationWarning tests/test_plots.py   # keep chart output warning-free
 ```
 
 Tests never hit the network: anything that talks to Claude takes an `LLM` and tests pass `FakeLLM` (`mlagent/llm.py`).
@@ -22,6 +23,8 @@ Tests never hit the network: anything that talks to Claude takes an `LLM` and te
 ## Architecture
 
 - `mlagent/orchestrator.py` runs `stages/*` in order and checkpoints to `state.json` in the project folder so a Colab runtime reset resumes. A stage is complete when its artifact exists and validates (`Stage.is_complete`).
+- Pipeline so far: `intake` → `data` → `clean` (`mlagent/stages/`). `data` writes `data/raw/data.csv`, `profile_raw.json`, `data_meta.json` (source, target). `clean` runs `audit.py`, lets the user approve fixes, writes `data/clean/data.csv`, `clean.py`, `audit.json`, `profile_clean.json`, and adds `splits` to `data_meta.json`. Raw data is never modified.
+- Pure modules do the work and are unit-tested without stages: `synth/tabular.py`, `profile.py`, `audit.py` (checks → `Issue` with a proposed fix dict), `cleaning.py` (fix dicts → `apply_steps`; `render_clean_py` writes a re-runnable script that calls the same function), `plots.py` (all matplotlib figures; `present()` saves to `plots/` and displays under IPython), `datasources/drive.py`, `datasources/hf.py` (HuggingFace calls are lazy imports and injectable; tests never hit the network).
 - `mlagent/llm.py` is the only place that calls the Anthropic SDK. It runs a manual tool-use loop: stages hand it `ToolSpec`s whose handlers do the real work (ask the user, write files). Structured results come back through tools, never by parsing prose.
 - `mlagent/stages/base.py` defines `StageContext` (project, llm, questioner, explainer, display). Stages take everything from the context so they are testable with `ScriptedQuestioner` and `FakeLLM`.
 - User questions go through the `Questioner` protocol (`ui/questions.py`). In Colab this is `input()`-based because widget clicks cannot block a running cell.
