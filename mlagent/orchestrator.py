@@ -59,9 +59,20 @@ class Orchestrator:
                 state["current"] = stage.name
                 self._save(state)
                 self.ctx.display(f"**Stage: {stage.name}**")
+                self.ctx.stage = stage.name
                 stage.run(self.ctx)
-                self.mark_complete(stage.name)
-                ran.append(stage.name)
+                if stage.is_complete(self.ctx):
+                    self.mark_complete(stage.name)
+                    ran.append(stage.name)
+                else:
+                    self.ctx.display(
+                        f"Stage {stage.name} did not finish; rerun orch.run() to continue."
+                    )
+                    return ran
             if until is not None and stage.name == until:
                 break
+        if not ran:
+            state = self._state()
+            if all(s.name in state["completed"] for s in self.stages):
+                self.ctx.display("Nothing to do: all stages complete.")
         return ran
