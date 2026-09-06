@@ -23,7 +23,10 @@ def test_profile_columns_and_target_counts():
     assert a["min"] == 1.0 and a["max"] == 4.0
     b = next(c for c in p["columns"] if c["name"] == "b")
     assert "min" not in b and b["sample"] == ["x", "y"]
-    assert p["target"] == {"name": "target", "kind": "categorical", "counts": {"0": 2, "1": 2}}
+    assert p["target"] == {
+        "name": "target", "kind": "categorical", "n_classes": 2, "total": 4,
+        "counts": {"0": 2, "1": 2},
+    }
     json.dumps(p)  # must be serialisable
 
 
@@ -67,6 +70,19 @@ def test_profile_all_missing_numeric_target():
     assert p["target"]["max"] is None
     assert p["target"]["mean"] is None
     assert p["target"]["std"] is None
+
+
+def test_categorical_target_reports_n_classes_and_total_beyond_listed_cap():
+    n = 400
+    df = pd.DataFrame({
+        "x": range(n),
+        "target": [i % 40 for i in range(n)],
+    })
+    p = profile_dataframe(df, target="target")
+    assert p["target"]["kind"] == "categorical"
+    assert p["target"]["n_classes"] == 40
+    assert p["target"]["total"] == n
+    assert len(p["target"]["counts"]) == 20
 
 
 def test_profile_markdown_escapes_pipes():

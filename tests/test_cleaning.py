@@ -107,3 +107,25 @@ def test_normalise_categories_numeric_unchanged():
                                   "params": {"column": "num"}}])
     assert out["num"].dtype == df_test["num"].dtype
     pd.testing.assert_frame_equal(out, df_test)
+
+
+def test_per_column_ops_are_no_ops_on_missing_column():
+    """normalise_categories, clip_outliers, and coerce_numeric must not crash (or
+    change anything) when their target column is absent, e.g. because another
+    approved fix already dropped it."""
+    original = df()
+    steps = [
+        {"op": "normalise_categories", "params": {"column": "not_there"}},
+        {"op": "clip_outliers", "params": {"column": "not_there", "lower": 0.0, "upper": 1.0}},
+        {"op": "coerce_numeric", "params": {"column": "not_there"}},
+    ]
+    for step in steps:
+        out = apply_steps(original, [step])
+        pd.testing.assert_frame_equal(out, original)
+
+
+def test_describe_step_clip_outliers_handles_missing_bounds():
+    """describe_step for clip_outliers must not crash when bounds are None."""
+    step = {"op": "clip_outliers", "params": {"column": "x", "lower": None, "upper": None}}
+    text = describe_step(step)
+    assert "x" in text and "typical range" in text

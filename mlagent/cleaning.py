@@ -46,6 +46,8 @@ def _drop_rows_missing_target(df: pd.DataFrame, target: str) -> pd.DataFrame:
 
 
 def _normalise_categories(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    if column not in df.columns:
+        return df
     s = df[column]
     if not (s.dtype == "object" or s.dtype.name == "string"):
         return df
@@ -56,12 +58,16 @@ def _normalise_categories(df: pd.DataFrame, column: str) -> pd.DataFrame:
 
 
 def _clip_outliers(df: pd.DataFrame, column: str, lower: float, upper: float) -> pd.DataFrame:
+    if column not in df.columns:
+        return df
     out = df.copy()
     out[column] = out[column].clip(lower=lower, upper=upper)
     return out
 
 
 def _coerce_numeric(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    if column not in df.columns:
+        return df
     out = df.copy()
     out[column] = pd.to_numeric(out[column], errors="coerce")
     return out
@@ -104,7 +110,10 @@ def describe_step(step: dict) -> str:
     if op == "normalise_categories":
         return f"trim whitespace and lower-case the categories in `{p.get('column')}`"
     if op == "clip_outliers":
-        return f"clip `{p.get('column')}` to the range {p.get('lower'):.4g} to {p.get('upper'):.4g}"
+        lower, upper = p.get("lower"), p.get("upper")
+        if lower is None or upper is None:
+            return f"clip `{p.get('column')}` to its typical range"
+        return f"clip `{p.get('column')}` to the range {lower:.4g} to {upper:.4g}"
     if op == "coerce_numeric":
         return f"convert `{p.get('column')}` to numbers (non-numeric entries become missing)"
     return f"{op} {p}"

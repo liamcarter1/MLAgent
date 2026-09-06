@@ -8,7 +8,8 @@ from typing import Any
 import pandas as pd
 from pandas.api import types as ptypes
 
-MAX_CATEGORIES = 20
+CATEGORICAL_MAX_UNIQUE = 50
+MAX_LISTED_CATEGORIES = 20
 
 
 def _py(value: Any) -> Any:
@@ -28,7 +29,7 @@ def is_categorical_series(s: pd.Series) -> bool:
     if ptypes.is_bool_dtype(s) or not ptypes.is_numeric_dtype(s):
         return True
     vals = s.dropna()
-    if vals.empty or vals.nunique() > MAX_CATEGORIES:
+    if vals.empty or vals.nunique() > CATEGORICAL_MAX_UNIQUE:
         return False
     return bool((vals % 1 == 0).all())
 
@@ -56,10 +57,13 @@ def _column_info(name: str, s: pd.Series) -> dict:
 
 def _target_info(name: str, s: pd.Series) -> dict:
     if is_categorical_series(s):
-        counts = s.value_counts(dropna=True).head(MAX_CATEGORIES)
+        all_counts = s.value_counts(dropna=True)
+        counts = all_counts.head(MAX_LISTED_CATEGORIES)
         return {
             "name": name,
             "kind": "categorical",
+            "n_classes": int(all_counts.shape[0]),
+            "total": int(all_counts.sum()),
             "counts": {str(k): int(v) for k, v in counts.items()},
         }
     vals = s.dropna()

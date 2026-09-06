@@ -35,6 +35,9 @@ def test_synthetic_classification_writes_artifacts_and_plots(project):
     meta = project.read_json(META_FILE)
     assert meta["source"] == "synthetic" and meta["target"] == "target"
     assert meta["synth_config"]["n_samples"] == 300 and meta["synth_config"]["class_balance"] == 0.6
+    assert meta["raw_n_rows"] == len(df) and meta["raw_n_cols"] == df.shape[1]
+    assert meta["task_type"] == "tabular_classification"
+    assert meta["raw_path"] == "data/raw/data.csv"
     assert project.read_json(PROFILE_RAW_FILE)["target"]["kind"] == "categorical"
     for name in ("raw_histograms", "raw_missing", "raw_class_balance", "raw_correlation"):
         assert (project.plots_dir / f"{name}.png").exists()
@@ -58,7 +61,8 @@ def test_drive_source_lists_files_and_asks_target(project, tmp_path):
     DataStage(search_roots=[root]).run(ctx)
     meta = project.read_json(META_FILE)
     assert meta == {
-        **meta, "source": "drive", "target": "churned", "source_path": str(csv), "n_rows": 3,
+        **meta, "source": "drive", "target": "churned", "source_path": str(csv),
+        "raw_n_rows": 3,
     }
     assert "Which column is the target" in ctx.questioner.asked[-1]
 

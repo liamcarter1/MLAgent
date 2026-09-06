@@ -60,9 +60,10 @@ class DataStage:
         meta.update(
             {
                 "target": target,
-                "raw_path": str(path),
-                "n_rows": int(len(df)),
-                "n_cols": int(df.shape[1]),
+                "raw_path": path.relative_to(ctx.project.root).as_posix(),
+                "raw_n_rows": int(len(df)),
+                "raw_n_cols": int(df.shape[1]),
+                "task_type": spec.task_type,
             }
         )
         ctx.project.write_json(META_FILE, meta)
@@ -141,7 +142,7 @@ class DataStage:
         labels = [f"{r.id} — {r.downloads:,} downloads — {r.description[:60]}" for r in results]
         pick = q.choice("Which dataset?", labels, allow_other=False)
         chosen = results[labels.index(pick)]
-        ctx.display(f"Downloading **{chosen.id}** from the HuggingFace Hub…")
+        ctx.display(f"Downloading **{chosen.id}** from the HuggingFace Hub...")
         df = self.hf_load(chosen.id)
         target = self._ask_target(ctx, df)
         return df, target, {"source": "huggingface", "hf_id": chosen.id}
@@ -152,7 +153,9 @@ class DataStage:
         plots.present(plots.missing_matrix(df), pdir, "raw_missing")
         t = profile.get("target")
         if t and t["kind"] == "categorical":
-            plots.present(plots.class_balance(t["counts"]), pdir, "raw_class_balance")
+            plots.present(
+                plots.class_balance(t["counts"], t.get("total")), pdir, "raw_class_balance"
+            )
         elif t:
             plots.present(plots.target_distribution(df[t["name"]]), pdir, "raw_target_distribution")
         if df.select_dtypes("number").shape[1] >= 2:

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.datasets import make_classification, make_regression
 
 TASKS = ("classification", "regression")
 QUIRKS = (
@@ -61,6 +60,8 @@ class SynthTabularConfig:
 
 
 def _base(cfg: SynthTabularConfig) -> pd.DataFrame:
+    from sklearn.datasets import make_classification, make_regression
+
     if cfg.task == "classification":
         n_inf = cfg.n_informative()
         weights = [cfg.class_balance, 1 - cfg.class_balance] if cfg.n_classes == 2 else None

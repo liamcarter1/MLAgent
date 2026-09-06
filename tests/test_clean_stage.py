@@ -72,6 +72,11 @@ def test_approved_fixes_are_applied_and_recorded(project):
         and meta["dropped_columns"] == []
     )
     assert project.read_json(PROFILE_CLEAN_FILE)["n_rows"] == len(cleaned)
+    assert meta["clean_n_rows"] == len(cleaned) and meta["clean_n_cols"] == cleaned.shape[1]
+    assert meta["clean_path"] == "data/clean/data.csv"
+    assert meta["feature_columns"] == [c for c in cleaned.columns if c != "target"]
+    assert meta["categorical_columns"] == ["cat"]
+    assert meta["n_classes"] == 2 and meta["class_labels"] == ["0", "1"]
     assert (project.plots_dir / "clean_before_after_missing.png").exists()
     assert any("[[missing values]]" in s for s in shown)
     assert any("Cleaning summary" in s for s in shown)
@@ -108,6 +113,61 @@ def test_clean_data_has_no_issues_and_splits_are_adjusted(project):
     splits = project.read_json(META_FILE)["splits"]
     assert splits["test"] >= 0.05 and abs(sum(splits.values()) - 1.0) < 1e-6
     assert json.loads((project.root / AUDIT_FILE).read_text(encoding="utf-8"))["issues"] == []
+
+
+def user_id_collision_df() -> pd.DataFrame:
+    """Unique-on-raw-values user_id (triggers id_column) with case collisions once
+    normalised (triggers inconsistent_categories on the same column)."""
+    n = 40
+    values = [f"User{i}" for i in range(n)]
+    values[0] = "user1"  # collides with "User1" once lower-cased
+    values[2] = "user3"  # collides with "User3" once lower-cased
+    rng = np.random.default_rng(7)
+    return pd.DataFrame({
+        "user_id": values,
+        "f1": rng.normal(size=n),
+        "target": rng.integers(0, 2, size=n),
+    })
+
+
+def test_approved_drop_and_percolumn_fix_on_same_column_does_not_crash(project):
+    df = user_id_collision_df()
+    prepare(project, df)
+    issues = audit_tabular(df, "target")
+    by_kind = {i.kind: i for i in issues if i.column == "user_id"}
+    assert "id_column" in by_kind and "inconsistent_categories" in by_kind
+    n_fixable = sum(1 for i in issues if i.fix)
+    ctx, _ = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
+    CleanStage().run(ctx)  # must not raise
+    cleaned = pd.read_csv(project.data_clean / CLEAN_FILE)
+    assert "user_id" not in cleaned.columns
+    audit = project.read_json(AUDIT_FILE)
+    skipped = next(d for d in audit["decisions"] if d["kind"] == "inconsistent_categories")
+    assert skipped["approved"] is True
+    assert skipped["applied"] is False
+    assert skipped["reason"] == "column dropped"
+    dropped = next(d for d in audit["decisions"] if d["kind"] == "id_column")
+    assert dropped["approved"] is True and dropped["applied"] is True
+
+
+def test_target_becomes_float_via_nan_drop_is_saved_as_int(project):
+    rng = np.random.default_rng(9)
+    n = 100
+    target = rng.integers(0, 2, size=n).astype(float)
+    target[:5] = np.nan
+    df = pd.DataFrame({
+        "a": rng.normal(size=n),
+        "b": rng.normal(size=n),
+        "target": target,
+    })
+    prepare(project, df)
+    issues = audit_tabular(df, "target")
+    n_fixable = sum(1 for i in issues if i.fix)
+    ctx, _ = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
+    CleanStage().run(ctx)
+    cleaned = pd.read_csv(project.data_clean / CLEAN_FILE)
+    assert cleaned["target"].isna().sum() == 0
+    assert pd.api.types.is_integer_dtype(cleaned["target"].dtype)
 
 
 def test_llm_failure_does_not_block_cleaning(project):

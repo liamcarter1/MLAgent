@@ -80,17 +80,19 @@ def feature_histograms(
     return fig
 
 
-def class_balance(counts: dict[str, int], title: str = "Target class balance") -> Figure:
+def class_balance(
+    counts: dict[str, int], total: int | None = None, title: str = "Target class balance"
+) -> Figure:
     fig = plt.figure(
         figsize=(5, 0.5 * max(3, len(counts)) + 1.2), facecolor=SURFACE
     )
     ax = fig.add_subplot(111)
     labels = [str(k) for k in counts]
     values = [int(v) for v in counts.values()]
-    total = sum(values) or 1
+    denom = total if total else (sum(values) or 1)
     ax.barh(labels, values, color=SERIES[0], height=0.6)
     for i, v in enumerate(values):
-        ax.text(v, i, f"  {v} ({v / total:.0%})", va="center", color=INK_2, fontsize=8)
+        ax.text(v, i, f"  {v} ({v / denom:.0%})", va="center", color=INK_2, fontsize=8)
     _style(ax, title, grid_axis="x")
     ax.invert_yaxis()
     ax.set_xlim(0, max(values) * 1.3 if values else 1)
@@ -109,25 +111,29 @@ def target_distribution(series: pd.Series, title: str = "Target distribution") -
     return fig
 
 
-def missing_matrix(df: pd.DataFrame, max_rows: int = 500) -> Figure:
+def missing_matrix(df: pd.DataFrame, max_rows: int = 500, max_cols: int = 60) -> Figure:
     sample = (
         df if len(df) <= max_rows
         else df.sample(max_rows, random_state=0).sort_index()
     )
-    mat = sample.isna().to_numpy().T.astype(float)
+    columns = list(df.columns)[:max_cols]
+    shown_cols = sample[columns]
+    mat = shown_cols.isna().to_numpy().T.astype(float)
     fig = plt.figure(
-        figsize=(7, 0.28 * len(df.columns) + 1.5), facecolor=SURFACE
+        figsize=(7, 0.28 * len(columns) + 1.5), facecolor=SURFACE
     )
     ax = fig.add_subplot(111)
     ax.imshow(
         mat, aspect="auto", cmap=SEQ_CMAP, interpolation="nearest", vmin=0, vmax=1
     )
-    ax.set_yticks(range(len(df.columns)))
-    ax.set_yticklabels([str(c) for c in df.columns], fontsize=8, color=INK_2)
-    ax.set_xlabel(
-        f"rows (showing {len(sample)} of {len(df)})", color=MUTED, fontsize=8
-    )
-    _style(ax, "Missing values (dark = missing)", grid_axis="none")
+    ax.set_yticks(range(len(columns)))
+    ax.set_yticklabels([str(c) for c in columns], fontsize=8, color=INK_2)
+    xlabel = f"rows (showing {len(sample)} of {len(df)})"
+    title = "Missing values (dark = missing)"
+    if len(columns) < len(df.columns):
+        title += f" - showing {len(columns)} of {len(df.columns)} columns"
+    ax.set_xlabel(xlabel, color=MUTED, fontsize=8)
+    _style(ax, title, grid_axis="none")
     fig.tight_layout()
     return fig
 
@@ -181,10 +187,12 @@ def outlier_boxplots(df: pd.DataFrame, columns, max_cols: int = 8) -> Figure:
     return fig
 
 
-def before_after_missing(before: dict, after: dict) -> Figure:
-    names = [c["name"] for c in before["columns"]]
+def before_after_missing(before: dict, after: dict, max_cols: int = 60) -> Figure:
+    all_names = [c["name"] for c in before["columns"]]
+    names = all_names[:max_cols]
     after_pct = {c["name"]: c["missing_pct"] for c in after["columns"]}
-    b = [c["missing_pct"] for c in before["columns"]]
+    before_pct = {c["name"]: c["missing_pct"] for c in before["columns"]}
+    b = [before_pct[n] for n in names]
     a = [after_pct.get(n, 0.0) for n in names]
     y = np.arange(len(names))
     fig = plt.figure(
@@ -197,7 +205,10 @@ def before_after_missing(before: dict, after: dict) -> Figure:
     ax.set_yticklabels(names, fontsize=8, color=INK_2)
     ax.set_xlabel("% missing", color=MUTED, fontsize=8)
     ax.invert_yaxis()
-    _style(ax, "Missing values before and after cleaning", grid_axis="x")
+    title = "Missing values before and after cleaning"
+    if len(names) < len(all_names):
+        title += f" - showing {len(names)} of {len(all_names)} columns"
+    _style(ax, title, grid_axis="x")
     ax.legend(frameon=False, fontsize=8, labelcolor=INK_2)
     fig.tight_layout()
     return fig

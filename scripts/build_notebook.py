@@ -19,7 +19,10 @@ cells = [
         "term does nothing until that cell finishes. Click terms after a stage completes, or run "
         "`colab.explain('term')` in its own cell."
     ),
-    nbf.v4.new_code_cell("%pip -q install anthropic markdown"),
+    nbf.v4.new_code_cell(
+        "%pip -q install anthropic markdown pandas numpy scikit-learn matplotlib pyarrow "
+        "openpyxl huggingface_hub datasets"
+    ),
     nbf.v4.new_code_cell(
         "from google.colab import drive\n"
         "drive.mount('/content/drive')\n"

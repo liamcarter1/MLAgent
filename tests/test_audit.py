@@ -125,6 +125,79 @@ def test_numeric_as_text_detected():
     }
 
 
+def test_free_text_comment_column_is_not_flagged_as_id():
+    n = 60
+    df = pd.DataFrame({
+        "comment": [f"this is a unique sentence number {i} about the order" for i in range(n)],
+        "x": np.arange(n, dtype=float),
+        "target": [0, 1] * (n // 2),
+    })
+    kinds_found = kinds(audit_tabular(df, target="target"))
+    assert "id_column" not in kinds_found
+
+
+def test_unique_datetime_string_column_is_not_flagged_as_id():
+    n = 60
+    df = pd.DataFrame({
+        "when": pd.date_range("2020-01-01", periods=n, freq="D").astype(str),
+        "x": np.arange(n, dtype=float),
+        "target": [0, 1] * (n // 2),
+    })
+    kinds_found = kinds(audit_tabular(df, target="target"))
+    assert "id_column" not in kinds_found
+
+
+def test_row_id_and_user_id_tokens_still_flagged():
+    n = 60
+    df = pd.DataFrame({
+        "row_id": np.arange(n),
+        "user_id": [f"u{i}xyz" for i in range(n)],
+        "x": np.arange(n, dtype=float),
+        "target": [0, 1] * (n // 2),
+    })
+    by_kind_cols = [
+        i.column for i in audit_tabular(df, target="target") if i.kind == "id_column"
+    ]
+    assert set(by_kind_cols) == {"row_id", "user_id"}
+
+
+def test_mixed_case_unique_user_id_flags_id_and_inconsistent_categories():
+    """user_id is fully unique on raw values (so id_column fires) but has case
+    collisions after normalisation (so inconsistent_categories also fires)."""
+    n = 40
+    values = [f"User{i}" for i in range(n)]
+    # introduce case collisions with a couple of other rows' lower-cased forms,
+    # without breaking uniqueness of the raw strings themselves.
+    values[0] = "user1"  # collides with "User1" once lower-cased
+    values[2] = "user3"  # collides with "User3" once lower-cased
+    df = pd.DataFrame({
+        "user_id": values,
+        "x": np.arange(n, dtype=float),
+        "target": [0, 1] * (n // 2),
+    })
+    by_kind = {i.kind: i for i in audit_tabular(df, target="target") if i.column == "user_id"}
+    assert "id_column" in by_kind
+    assert "inconsistent_categories" in by_kind
+
+
+def test_high_cardinality_free_text_not_flagged_inconsistent_categories():
+    n = 200
+    notes = [f"note about order {i} shipped on time" for i in range(n)]
+    notes[1] = notes[1].upper()  # one case collision
+    df = pd.DataFrame({
+        "notes": notes,
+        "x": np.arange(n, dtype=float),
+        "target": [0, 1] * (n // 2),
+    })
+    kinds_found = kinds(audit_tabular(df, target="target"))
+    assert "inconsistent_categories" not in kinds_found
+
+
+def test_low_cardinality_messy_categories_still_flagged():
+    kinds_found = kinds(audit_tabular(messy_df(), target="target"))
+    assert "inconsistent_categories" in kinds_found
+
+
 def test_constant_numeric_column_no_correlation_warning():
     """Constant numeric column should not raise RuntimeWarning on correlation."""
     df = pd.DataFrame({

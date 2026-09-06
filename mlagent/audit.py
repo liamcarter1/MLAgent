@@ -6,6 +6,7 @@ Each check returns Issues with evidence and a proposed fix.
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
@@ -45,6 +46,30 @@ def _to_str_key(val) -> str:
 
 def _features(df: pd.DataFrame, target: str | None) -> list[str]:
     return [str(c) for c in df.columns if c != target]
+
+
+def _looks_token_like(vals: pd.Series, max_len: int = 40) -> bool:
+    """True if every non-null value has no whitespace and is short (id/token-like)."""
+    if vals.empty:
+        return False
+    str_vals = vals.astype(str)
+    return bool(
+        (~str_vals.str.contains(r"\s", regex=True)).all()
+        and (str_vals.str.len() <= max_len).all()
+    )
+
+
+def _looks_like_datetime(vals: pd.Series, sample_size: int = 200) -> bool:
+    """True if most of a sample of values parse as datetimes."""
+    if vals.empty:
+        return False
+    sample = vals.astype(str)
+    if len(sample) > sample_size:
+        sample = sample.sample(sample_size, random_state=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        parsed = pd.to_datetime(sample, errors="coerce", format="mixed")
+    return bool(parsed.notna().mean() >= 0.9)
 
 
 def _check_target(df: pd.DataFrame, target: str | None) -> list[Issue]:
@@ -191,7 +216,7 @@ def _check_categorical_consistency(df: pd.DataFrame, target: str | None) -> list
             continue
         raw = int(vals.nunique())
         norm = int(vals.str.strip().str.lower().nunique())
-        if norm < raw:
+        if norm < raw and norm <= 50:
             out.append(Issue(
                 "inconsistent_categories", "medium",
                 f"'{col}' has {raw} spellings for {norm} real categories"
@@ -236,7 +261,12 @@ def _check_leakage(df: pd.DataFrame, target: str | None) -> list[Issue]:
         s = df[col]
         if n >= 20 and (ptypes.is_integer_dtype(s) or ptypes.is_object_dtype(s)):
             ratio = s.nunique(dropna=True) / n
-            if ratio == 1.0 or (ratio >= 0.95 and ID_NAME.search(col)):
+            is_id = ratio == 1.0 or (ratio >= 0.95 and ID_NAME.search(col))
+            if is_id and ptypes.is_object_dtype(s):
+                vals = s.dropna()
+                name_or_token = bool(ID_NAME.search(col)) or _looks_token_like(vals)
+                is_id = name_or_token and not _looks_like_datetime(vals)
+            if is_id:
                 out.append(Issue(
                     "id_column", "high",
                     f"'{col}' is unique for (almost) every row; it is an"
