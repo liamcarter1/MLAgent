@@ -19,3 +19,20 @@ Run after each milestone. Copy `mlagent/` to `MyDrive/ml_agent/mlagent/` first.
 - [ ] New project with data source "HuggingFace Hub dataset": search "iris" (or any small tabular set), pick one, pick the target; the audit runs on it.
 - [ ] Runtime reset after the data stage: `orch.run()` skips intake and data, resumes at clean.
 - [ ] Click a term inside the report card; the explanation mentions the current dataset (target column or issue).
+
+## Milestone 3 (Tabular training end-to-end)
+
+Prerequisite: a project that has completed the Milestone 2 checklist (clean data and splits).
+
+1. Run the start cell. The codegen stage lists `data.py`, `model.py`, `train.py`, `config.json`
+   in the project folder on Drive and shows a config table with a rationale. Click one
+   `[[term]]` and confirm an explanation appears.
+2. Answer "y" to the configuration question. The train stage prints the CPU/no-cost-gate note,
+   then a loss/metric figure redraws in the cell as epochs complete.
+3. When training ends: `runs.jsonl` has one line; `plots/` contains `run1_training.png` and the
+   validation evaluation figures; the debrief mentions the best epoch.
+4. The report stage asks before touching the test set. Answer "y". `eval_test.json` and
+   `report.md` appear in the project folder; open `report.md` in Drive and check the figures render.
+5. Run the "Train again" cell. A second run is logged as run 2 and the report is rewritten.
+6. Disconnect and reconnect the runtime, rerun the setup and start cells: the orchestrator reports
+   nothing to do.

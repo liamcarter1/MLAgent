@@ -1,4 +1,4 @@
-"""End-to-end run of intake -> data -> clean through the Orchestrator, no network."""
+"""End-to-end run of intake -> data -> clean -> codegen -> train -> report, no network."""
 
 from __future__ import annotations
 
@@ -6,13 +6,18 @@ import pandas as pd
 
 from mlagent.llm import FakeLLM
 from mlagent.orchestrator import Orchestrator
+from mlagent.runlog import read_runs
 from mlagent.stages.base import StageContext
 from mlagent.stages.clean import AUDIT_FILE, CLEAN_FILE, CLEAN_PY, CleanStage
+from mlagent.stages.codegen import CodegenStage
 from mlagent.stages.data import RAW_FILE, DataStage
 from mlagent.stages.intake import IntakeStage
+from mlagent.stages.report import ReportStage
+from mlagent.stages.train import TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
 
-# Answers for every non-confirm question asked across intake -> data -> clean, in order.
+# Answers for every non-confirm question asked across the pipeline, in order.
+# codegen, train and report ask only confirm() questions, which AutoApproveQuestioner answers.
 ANSWERS = [
     "Predict churn from account data",  # intake: goal
     "Tabular classification",           # intake: task type label
@@ -32,6 +37,8 @@ ANSWERS = [
     "0.15",                             # clean: validation fraction
 ]
 
+ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "report"]
+
 
 class AutoApproveQuestioner(ScriptedQuestioner):
     """Like ScriptedQuestioner, but every confirm() is approved without consuming
@@ -50,13 +57,15 @@ def make_orchestrator(project, answers):
         explainer=None,
         display=lambda s: None,
     )
-    return Orchestrator(ctx, [IntakeStage(), DataStage(), CleanStage()])
+    stages = [IntakeStage(), DataStage(), CleanStage(), CodegenStage(),
+              TrainStage(poll_seconds=0.05), ReportStage(poll_seconds=0.05)]
+    return Orchestrator(ctx, stages)
 
 
 def test_full_pipeline_runs_and_is_reproducible_and_resumable(project):
     orch = make_orchestrator(project, list(ANSWERS))
     ran = orch.run()
-    assert ran == ["intake", "data", "clean"]
+    assert ran == ALL_STAGES
 
     # Artifacts from every stage exist.
     assert project.exists("spec.json")
@@ -68,7 +77,15 @@ def test_full_pipeline_runs_and_is_reproducible_and_resumable(project):
     assert project.exists(AUDIT_FILE)
     assert project.exists("profile_clean.json")
     assert (project.root / CLEAN_PY).exists()
+    for name in ("data.py", "model.py", "train.py", "config.json", "metrics.json",
+                 "eval_val.json", "eval_test.json", "runs.jsonl", "report.md"):
+        assert project.exists(name), name
+    assert (project.checkpoints_dir / "best.joblib").exists()
+    assert (project.plots_dir / "run1_training.png").exists()
+    assert (project.plots_dir / "test_confusion.png").exists()
     assert project.exists("state.json")
+    runs = read_runs(project.runs_path)
+    assert len(runs) == 1 and runs[0]["status"] == "done"
 
     # clean.py reproduces data/clean/data.csv exactly when run on data/raw/data.csv.
     raw_df = pd.read_csv(project.data_raw / RAW_FILE)
@@ -83,7 +100,9 @@ def test_full_pipeline_runs_and_is_reproducible_and_resumable(project):
     (project.root / "state.json").unlink()
     assert orch.run() == []
 
-    # Resetting "clean" reruns only that stage.
-    orch.reset("clean")
-    orch.ctx.questioner = AutoApproveQuestioner(["", "0.7", "0.15"])
-    assert orch.run() == ["clean"]
+    # Resetting "train" reruns training and the report; a second run is logged.
+    orch.reset("train")
+    orch.ctx.questioner = AutoApproveQuestioner([])
+    assert orch.run() == ["train", "report"]
+    assert len(read_runs(project.runs_path)) == 2
+    assert (project.plots_dir / "run2_training.png").exists()

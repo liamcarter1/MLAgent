@@ -36,7 +36,10 @@ def test_make_context_and_start(tmp_path):
     assert ctx.project.root.is_dir()
     assert ctx.explainer is not None
     orch = colab.start("demo", drive_root=str(tmp_path), llm=FakeLLM([]))
-    assert [s.name for s in orch.stages] == ["intake", "data", "clean"]
+    assert [s.name for s in orch.stages] == ["intake", "data", "clean", "codegen", "train",
+                                             "report"]
+    snap = colab._context_snapshot(orch.ctx.project, "train")
+    assert snap["config"] is None and snap["latest_run"] is None
 
 
 def test_context_snapshot_includes_data_meta_and_audit(tmp_path):

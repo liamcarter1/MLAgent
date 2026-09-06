@@ -10,10 +10,14 @@ from mlagent import config
 from mlagent.llm import LLM, AnthropicLLM
 from mlagent.orchestrator import Orchestrator
 from mlagent.project import Project
+from mlagent.runlog import read_runs
 from mlagent.stages.base import StageContext
 from mlagent.stages.clean import AUDIT_FILE, CleanStage
+from mlagent.stages.codegen import CodegenStage
 from mlagent.stages.data import META_FILE, DataStage
 from mlagent.stages.intake import IntakeStage
+from mlagent.stages.report import ReportStage
+from mlagent.stages.train import TrainStage
 from mlagent.ui.explain import Explainer, Glossary
 from mlagent.ui.questions import ConsoleQuestioner
 from mlagent.ui.render import display_message
@@ -61,6 +65,7 @@ def setup(drive_root: str = config.DRIVE_ROOT, mount: bool = True) -> Path:
 
 
 def _context_snapshot(project: Project, stage_name: str = "") -> dict:
+    runs = read_runs(project.runs_path)
     return {
         "project": project.name,
         "stage": stage_name,
@@ -70,6 +75,8 @@ def _context_snapshot(project: Project, stage_name: str = "") -> dict:
         "audit_issue_kinds": [
             i.get("kind") for i in (project.read_json(AUDIT_FILE) or {}).get("issues", [])
         ],
+        "config": project.read_json(config.CONFIG_FILE),
+        "latest_run": runs[-1] if runs else None,
     }
 
 
@@ -100,7 +107,10 @@ def start(
 ) -> Orchestrator:
     ctx = make_context(project_name, drive_root=drive_root, llm=llm)
     ctx.explainer.register_colab_callback()
-    return Orchestrator(ctx, [IntakeStage(), DataStage(), CleanStage()])
+    return Orchestrator(
+        ctx,
+        [IntakeStage(), DataStage(), CleanStage(), CodegenStage(), TrainStage(), ReportStage()],
+    )
 
 
 def explain(term: str, refresh: bool = False) -> None:

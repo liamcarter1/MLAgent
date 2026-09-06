@@ -36,6 +36,13 @@ cells = [
         "orch = colab.start(PROJECT_NAME)\n"
         "orch.run()"
     ),
+    nbf.v4.new_markdown_cell(
+        "## Train again\n\n"
+        "Edit `config.json` in the project folder (or let the assistant propose changes in a "
+        "later milestone), then rerun training and the report from here. `reset(\"train\")` "
+        "forgets the train and report stages; earlier stages are kept."
+    ),
+    nbf.v4.new_code_cell('orch.reset("train")\norch.run()'),
     nbf.v4.new_markdown_cell("### Ask about any term"),
     nbf.v4.new_code_cell("colab.explain('validation set')"),
     nbf.v4.new_markdown_cell(
