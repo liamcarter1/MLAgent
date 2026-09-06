@@ -161,7 +161,15 @@ def _check_mixed_types(df: pd.DataFrame, target: str | None) -> list[Issue]:
             continue
         numeric_fraction = float(pd.to_numeric(vals, errors="coerce").notna()
                                  .mean())
-        if 0.5 <= numeric_fraction < 1.0:
+        if numeric_fraction == 1.0:
+            out.append(Issue(
+                "numeric_as_text", "low",
+                f"'{col}' holds numbers stored as text; convert it so models"
+                " can use it as a number.",
+                col, {"numeric_fraction": 1.0},
+                {"op": "coerce_numeric", "params": {"column": col}},
+            ))
+        elif 0.5 <= numeric_fraction < 1.0:
             out.append(Issue(
                 "mixed_types", "medium",
                 f"'{col}' is mostly numbers stored as text ({numeric_fraction:.0%})"
@@ -240,6 +248,8 @@ def _check_leakage(df: pd.DataFrame, target: str | None) -> list[Issue]:
             continue
         if (ptypes.is_numeric_dtype(s) and ptypes.is_numeric_dtype(t)
                 and not is_categorical_series(t)):
+            if s.nunique(dropna=True) <= 1:
+                continue
             corr = s.corr(t)
             if pd.notna(corr) and abs(float(corr)) > 0.98:
                 out.append(Issue(

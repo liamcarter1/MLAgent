@@ -1,4 +1,5 @@
 import json
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -107,3 +108,31 @@ def test_clean_frame_has_no_issues():
         "target": rng.integers(0, 2, 100),
     })
     assert audit_tabular(df, target="target") == []
+
+
+def test_numeric_as_text_detected():
+    """Entirely numeric text column should flag numeric_as_text issue."""
+    df = pd.DataFrame({
+        "num_text": ["1", "2", "3", "4", "5"],
+        "target": [0, 1, 0, 1, 0],
+    })
+    by_kind = {i.kind: i for i in audit_tabular(df, target="target")}
+    assert "numeric_as_text" in by_kind
+    assert by_kind["numeric_as_text"].severity == "low"
+    assert by_kind["numeric_as_text"].fix == {
+        "op": "coerce_numeric",
+        "params": {"column": "num_text"},
+    }
+
+
+def test_constant_numeric_column_no_correlation_warning():
+    """Constant numeric column should not raise RuntimeWarning on correlation."""
+    df = pd.DataFrame({
+        "constant": [5.0, 5.0, 5.0, 5.0, 5.0],
+        "target": [0, 1, 0, 1, 0],
+    })
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        issues = audit_tabular(df, target="target")
+    # Should not have raised, and no leakage issue for constant column
+    assert not any(i.kind == "target_leakage" for i in issues)

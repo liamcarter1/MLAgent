@@ -80,3 +80,30 @@ def test_rendered_clean_py_reproduces_apply_steps():
     exec(compile(source, "clean.py", "exec"), namespace)
     pd.testing.assert_frame_equal(namespace["clean"](df()), apply_steps(df(), steps))
     assert namespace["STEPS"] == steps
+
+
+def test_fill_missing_all_nan_mode_no_exception():
+    """All-NaN column with mode strategy should not raise; column unchanged."""
+    df_test = pd.DataFrame({"all_nan": [np.nan, np.nan, np.nan]})
+    out = apply_steps(df_test, [{"op": "fill_missing",
+                                  "params": {"column": "all_nan",
+                                             "strategy": "mode"}}])
+    assert out["all_nan"].isna().sum() == 3
+    pd.testing.assert_frame_equal(out, df_test)
+
+
+def test_apply_steps_empty_returns_copy():
+    """Empty steps list should return a copy, not the same object."""
+    original = df()
+    out = apply_steps(original, [])
+    assert out is not original
+    pd.testing.assert_frame_equal(out, original)
+
+
+def test_normalise_categories_numeric_unchanged():
+    """Normalise on numeric column should not convert dtype."""
+    df_test = pd.DataFrame({"num": [1.0, 2.0, 3.0]})
+    out = apply_steps(df_test, [{"op": "normalise_categories",
+                                  "params": {"column": "num"}}])
+    assert out["num"].dtype == df_test["num"].dtype
+    pd.testing.assert_frame_equal(out, df_test)

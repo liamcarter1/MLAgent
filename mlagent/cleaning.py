@@ -34,6 +34,8 @@ def _fill_missing(
         fill = value
     else:
         raise ValueError(f"unknown fill strategy {strategy!r}")
+    if fill is None:
+        return df
     out = df.copy()
     out[column] = s.fillna(fill)
     return out
@@ -44,6 +46,9 @@ def _drop_rows_missing_target(df: pd.DataFrame, target: str) -> pd.DataFrame:
 
 
 def _normalise_categories(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    s = df[column]
+    if not (s.dtype == "object" or s.dtype.name == "string"):
+        return df
     out = df.copy()
     s = out[column]
     out[column] = s.where(s.isna(), s.astype(str).str.strip().str.lower())
@@ -74,6 +79,8 @@ OPS: dict[str, Callable[..., pd.DataFrame]] = {
 
 
 def apply_steps(df: pd.DataFrame, steps: list[dict]) -> pd.DataFrame:
+    if not steps:
+        return df.copy()
     out = df
     for step in steps:
         op = step.get("op")
