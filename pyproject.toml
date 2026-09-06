@@ -28,7 +28,7 @@ build-backend = "setuptools.build_meta"
 include = ["mlagent*"]
 
 [tool.setuptools.package-data]
-mlagent = ["prompts/*.md"]
+mlagent = ["prompts/*.md", "templates/*/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
