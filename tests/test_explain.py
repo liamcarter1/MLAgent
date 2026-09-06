@@ -28,8 +28,11 @@ def test_explainer_caches_and_uses_context(tmp_path):
     llm = FakeLLM(script=[[("text", "An [[epoch]] is one pass.")]])
     g = Glossary(tmp_path / "glossary.json")
     shown: list[str] = []
-    ex = Explainer(llm, g, context_provider=lambda: {"stage": "intake", "task_type": "tabular_classification"},
-                   display=shown.append)
+    ex = Explainer(
+        llm, g,
+        context_provider=lambda: {"stage": "intake", "task_type": "tabular_classification"},
+        display=shown.append,
+    )
     assert ex.explain("epoch") == "An [[epoch]] is one pass."
     assert ex.explain("epoch") == "An [[epoch]] is one pass."  # cached, no second call
     assert len(llm.calls) == 1
@@ -41,13 +44,17 @@ def test_explainer_caches_and_uses_context(tmp_path):
 
 def test_explainer_refresh_reasks(tmp_path):
     llm = FakeLLM(script=[[("text", "v1")], [("text", "v2")]])
-    ex = Explainer(llm, Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None)
+    ex = Explainer(
+        llm, Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None
+    )
     assert ex.explain("loss") == "v1"
     assert ex.explain("loss", refresh=True) == "v2"
 
 
 def test_register_colab_callback_without_colab_returns_false(tmp_path):
-    ex = Explainer(FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None)
+    ex = Explainer(
+        FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None
+    )
     assert ex.register_colab_callback() is False
 
 
@@ -62,7 +69,9 @@ def test_glossary_tolerates_corrupt_json_and_warns(tmp_path):
 
 def test_on_click_surfaces_llm_error_instead_of_raising(tmp_path):
     shown: list[str] = []
-    ex = Explainer(FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=shown.append)
+    ex = Explainer(
+        FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=shown.append
+    )
     ex._on_click("epoch")
     assert len(shown) == 1
     assert "epoch" in shown[0]
@@ -70,7 +79,9 @@ def test_on_click_surfaces_llm_error_instead_of_raising(tmp_path):
 
 
 def test_explain_raises_llm_error_when_script_exhausted(tmp_path):
-    ex = Explainer(FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None)
+    ex = Explainer(
+        FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None
+    )
     with pytest.raises(LLMError):
         ex.explain("epoch")
 
@@ -95,7 +106,9 @@ def test_register_colab_callback_wires_click_to_explain(tmp_path):
     try:
         llm = FakeLLM(script=[[("text", "An [[epoch]] is one pass.")]])
         shown: list[str] = []
-        ex = Explainer(llm, Glossary(tmp_path / "g.json"), context_provider=dict, display=shown.append)
+        ex = Explainer(
+            llm, Glossary(tmp_path / "g.json"), context_provider=dict, display=shown.append
+        )
 
         assert ex.register_colab_callback() is True
         assert registered["name"] == render.EXPLAIN_CALLBACK_NAME

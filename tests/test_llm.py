@@ -53,7 +53,9 @@ def test_fake_llm_runs_tool_then_finishes():
         [("text", "calling"), ("tool", "store", {"k": "v"})],
         [("text", "done [[epoch]]")],
     ])
-    result = llm.run(system="sys", messages=[{"role": "user", "content": "hi"}], tools=[echo_tool(store)])
+    result = llm.run(
+        system="sys", messages=[{"role": "user", "content": "hi"}], tools=[echo_tool(store)]
+    )
     assert store == {"k": "v"}
     assert result.text == "done [[epoch]]"
     assert result.tool_calls == [("store", {"k": "v"})]

@@ -36,31 +36,24 @@ def _label_to_code(answer: str, mapping: dict[str, str], allowed: tuple[str, ...
     return mapping[next(iter(mapping))]
 
 
-def _to_float(raw: str, default: float) -> float:
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
-def _to_int(raw: str, default: int) -> int:
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
 def collect_draft(q: Questioner) -> dict:
     goal = q.text("In one or two sentences, what do you want the model to do?")
-    task_type = _label_to_code(q.choice("What kind of task is it?", list(TASK_LABELS), allow_other=False),
-                               TASK_LABELS, TASK_TYPES)
-    metric = q.choice("Which metric defines success?", METRICS_FOR_TASK[task_type], allow_other=False)
-    target_value = _to_float(q.text(f"What {metric} value would count as good enough?", default="0.9"), 0.9)
-    data_source = _label_to_code(q.choice("Where will the data come from?", list(SOURCE_LABELS), allow_other=False),
-                                 SOURCE_LABELS, DATA_SOURCES)
-    minutes = _to_int(q.text("Roughly how many minutes per training run are acceptable?", default="10"), 10)
-    rounds = _to_int(q.text("How many tuning rounds at most?", default="5"), 5)
-    gpu = _label_to_code(q.choice("GPU preference?", list(GPU_LABELS), allow_other=False), GPU_LABELS, GPU_CHOICES)
+    task_type = _label_to_code(
+        q.choice("What kind of task is it?", list(TASK_LABELS), allow_other=False),
+        TASK_LABELS, TASK_TYPES,
+    )
+    metric = q.choice("Which metric defines success?", METRICS_FOR_TASK[task_type],
+                      allow_other=False)
+    target_value = q.number(f"What {metric} value would count as good enough?", default=0.9)
+    data_source = _label_to_code(
+        q.choice("Where will the data come from?", list(SOURCE_LABELS), allow_other=False),
+        SOURCE_LABELS, DATA_SOURCES,
+    )
+    minutes = int(q.number("Roughly how many minutes per training run are acceptable?",
+                           default=10, minimum=1))
+    rounds = int(q.number("How many tuning rounds at most?", default=5, minimum=1))
+    gpu = _label_to_code(q.choice("GPU preference?", list(GPU_LABELS), allow_other=False),
+                         GPU_LABELS, GPU_CHOICES)
     return {
         "goal": goal,
         "task_type": task_type,
@@ -156,8 +149,11 @@ class IntakeStage:
         prompt = "Interview answers (draft spec):\n" + json.dumps(draft, indent=2, sort_keys=True)
         result = None
         try:
-            result = ctx.llm.run(system=load_prompt("intake"), messages=[{"role": "user", "content": prompt}],
-                                 tools=tools)
+            result = ctx.llm.run(
+                system=load_prompt("intake"),
+                messages=[{"role": "user", "content": prompt}],
+                tools=tools,
+            )
         except LLMError as exc:
             ctx.display(f"Couldn't reach Claude ({exc}); saved your answers as the spec.")
         if not written:

@@ -10,10 +10,19 @@ class Questioner(Protocol):
     def choice(self, question: str, options: list[str], allow_other: bool = True) -> str: ...
     def text(self, prompt: str, default: str | None = None) -> str: ...
     def confirm(self, question: str, default: bool = True) -> bool: ...
+    def number(
+        self,
+        prompt: str,
+        default: float | None = None,
+        minimum: float | None = None,
+        maximum: float | None = None,
+    ) -> float: ...
 
 
 class ConsoleQuestioner:
-    def __init__(self, input_fn: Callable[[str], str] = input, print_fn: Callable[[str], None] = print):
+    def __init__(
+        self, input_fn: Callable[[str], str] = input, print_fn: Callable[[str], None] = print
+    ):
         self._input = input_fn
         self._print = print_fn
 
@@ -53,6 +62,35 @@ class ConsoleQuestioner:
             return default
         return raw in {"y", "yes"}
 
+    def number(
+        self,
+        prompt: str,
+        default: float | None = None,
+        minimum: float | None = None,
+        maximum: float | None = None,
+    ) -> float:
+        bounds = ""
+        if minimum is not None or maximum is not None:
+            lo = "" if minimum is None else f"{minimum:g}"
+            hi = "" if maximum is None else f"{maximum:g}"
+            bounds = f" ({lo} to {hi})"
+        suffix = f" [{default:g}]" if default is not None else ""
+        while True:
+            raw = self._input(f"{prompt}{bounds}{suffix} > ").strip()
+            if not raw and default is not None:
+                return float(default)
+            try:
+                value = float(raw)
+            except ValueError:
+                self._print("Please enter a number.")
+                continue
+            if (minimum is not None and value < minimum) or (
+                maximum is not None and value > maximum
+            ):
+                self._print(f"Please enter a number{bounds}.")
+                continue
+            return value
+
 
 class ScriptedQuestioner:
     def __init__(self, answers: list[str]):
@@ -77,3 +115,15 @@ class ScriptedQuestioner:
         if not answer:
             return default
         return answer in {"y", "yes", "true"}
+
+    def number(
+        self,
+        prompt: str,
+        default: float | None = None,
+        minimum: float | None = None,
+        maximum: float | None = None,
+    ) -> float:
+        answer = self._next(prompt).strip()
+        if not answer and default is not None:
+            return float(default)
+        return float(answer)

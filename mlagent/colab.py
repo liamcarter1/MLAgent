@@ -11,6 +11,8 @@ from mlagent.llm import LLM, AnthropicLLM
 from mlagent.orchestrator import Orchestrator
 from mlagent.project import Project
 from mlagent.stages.base import StageContext
+from mlagent.stages.clean import AUDIT_FILE, CleanStage
+from mlagent.stages.data import META_FILE, DataStage
 from mlagent.stages.intake import IntakeStage
 from mlagent.ui.explain import Explainer, Glossary
 from mlagent.ui.questions import ConsoleQuestioner
@@ -64,10 +66,16 @@ def _context_snapshot(project: Project, stage_name: str = "") -> dict:
         "stage": stage_name,
         "spec": project.read_json(config.SPEC_FILE),
         "state": project.read_json(config.STATE_FILE),
+        "data_meta": project.read_json(META_FILE),
+        "audit_issue_kinds": [
+            i.get("kind") for i in (project.read_json(AUDIT_FILE) or {}).get("issues", [])
+        ],
     }
 
 
-def make_context(project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None) -> StageContext:
+def make_context(
+    project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None
+) -> StageContext:
     global _LAST_CTX
     projects = setup(drive_root=drive_root, mount=False)
     project = Project(projects / project_name)
@@ -87,10 +95,12 @@ def make_context(project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LL
     return ctx
 
 
-def start(project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None) -> Orchestrator:
+def start(
+    project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None
+) -> Orchestrator:
     ctx = make_context(project_name, drive_root=drive_root, llm=llm)
     ctx.explainer.register_colab_callback()
-    return Orchestrator(ctx, [IntakeStage()])
+    return Orchestrator(ctx, [IntakeStage(), DataStage(), CleanStage()])
 
 
 def explain(term: str, refresh: bool = False) -> None:

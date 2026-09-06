@@ -1,0 +1,131 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from mlagent.cleaning import apply_steps, describe_step, render_clean_py
+
+
+def df():
+    return pd.DataFrame({
+        "id": [1, 2, 3, 3],
+        "x": [1.0, np.nan, 100.0, 100.0],
+        "cat": ["A ", "a", "b", "b"],
+        "num_text": ["1", "2", "n/a", "n/a"],
+        "target": [0, 1, np.nan, np.nan],
+    })
+
+
+def test_each_op():
+    step1 = {"op": "drop_columns", "params": {"columns": ["id", "missing_col"]}}
+    out = apply_steps(df(), [step1])
+    assert list(out.columns) == ["x", "cat", "num_text", "target"]
+    out = apply_steps(df(), [{"op": "drop_duplicates", "params": {}}])
+    assert len(out) == 3 and list(out.index) == [0, 1, 2]
+    step2 = {"op": "fill_missing",
+             "params": {"column": "x", "strategy": "median"}}
+    out = apply_steps(df(), [step2])
+    assert out["x"].isna().sum() == 0 and out.loc[1, "x"] == 100.0
+    step3 = {"op": "fill_missing",
+             "params": {"column": "cat", "strategy": "mode"}}
+    out = apply_steps(df(), [step3])
+    assert out["cat"].isna().sum() == 0
+    step4 = {"op": "drop_rows_missing_target",
+             "params": {"target": "target"}}
+    out = apply_steps(df(), [step4])
+    assert len(out) == 2
+    out = apply_steps(df(), [{"op": "normalise_categories",
+                              "params": {"column": "cat"}}])
+    assert out["cat"].tolist() == ["a", "a", "b", "b"]
+    step5 = {"op": "clip_outliers",
+             "params": {"column": "x", "lower": 0.0, "upper": 10.0}}
+    out = apply_steps(df(), [step5])
+    assert out["x"].max() == 10.0
+    out = apply_steps(df(), [{"op": "coerce_numeric",
+                              "params": {"column": "num_text"}}])
+    assert (out["num_text"].dtype.kind == "f"
+            and out["num_text"].isna().sum() == 2)
+
+
+def test_apply_steps_is_pure_and_ordered():
+    original = df()
+    steps = [
+        {"op": "drop_duplicates", "params": {}},
+        {"op": "drop_rows_missing_target", "params": {"target": "target"}},
+    ]
+    out = apply_steps(original, steps)
+    assert len(out) == 2 and len(original) == 4
+
+
+def test_unknown_op_raises():
+    with pytest.raises(ValueError):
+        apply_steps(df(), [{"op": "teleport", "params": {}}])
+
+
+def test_describe_step():
+    step1 = {"op": "drop_columns", "params": {"columns": ["id"]}}
+    assert "id" in describe_step(step1)
+    step2 = {"op": "fill_missing",
+             "params": {"column": "x", "strategy": "median"}}
+    assert "median" in describe_step(step2)
+    assert describe_step({"op": "drop_duplicates", "params": {}})
+
+
+def test_rendered_clean_py_reproduces_apply_steps():
+    steps = [
+        {"op": "drop_duplicates", "params": {}},
+        {"op": "normalise_categories", "params": {"column": "cat"}},
+    ]
+    source = render_clean_py(steps)
+    namespace: dict = {}
+    exec(compile(source, "clean.py", "exec"), namespace)
+    pd.testing.assert_frame_equal(namespace["clean"](df()), apply_steps(df(), steps))
+    assert namespace["STEPS"] == steps
+
+
+def test_fill_missing_all_nan_mode_no_exception():
+    """All-NaN column with mode strategy should not raise; column unchanged."""
+    df_test = pd.DataFrame({"all_nan": [np.nan, np.nan, np.nan]})
+    out = apply_steps(df_test, [{"op": "fill_missing",
+                                  "params": {"column": "all_nan",
+                                             "strategy": "mode"}}])
+    assert out["all_nan"].isna().sum() == 3
+    pd.testing.assert_frame_equal(out, df_test)
+
+
+def test_apply_steps_empty_returns_copy():
+    """Empty steps list should return a copy, not the same object."""
+    original = df()
+    out = apply_steps(original, [])
+    assert out is not original
+    pd.testing.assert_frame_equal(out, original)
+
+
+def test_normalise_categories_numeric_unchanged():
+    """Normalise on numeric column should not convert dtype."""
+    df_test = pd.DataFrame({"num": [1.0, 2.0, 3.0]})
+    out = apply_steps(df_test, [{"op": "normalise_categories",
+                                  "params": {"column": "num"}}])
+    assert out["num"].dtype == df_test["num"].dtype
+    pd.testing.assert_frame_equal(out, df_test)
+
+
+def test_per_column_ops_are_no_ops_on_missing_column():
+    """normalise_categories, clip_outliers, and coerce_numeric must not crash (or
+    change anything) when their target column is absent, e.g. because another
+    approved fix already dropped it."""
+    original = df()
+    steps = [
+        {"op": "normalise_categories", "params": {"column": "not_there"}},
+        {"op": "clip_outliers", "params": {"column": "not_there", "lower": 0.0, "upper": 1.0}},
+        {"op": "coerce_numeric", "params": {"column": "not_there"}},
+    ]
+    for step in steps:
+        out = apply_steps(original, [step])
+        pd.testing.assert_frame_equal(out, original)
+
+
+def test_describe_step_clip_outliers_handles_missing_bounds():
+    """describe_step for clip_outliers must not crash when bounds are None."""
+    step = {"op": "clip_outliers", "params": {"column": "x", "lower": None, "upper": None}}
+    text = describe_step(step)
+    assert "x" in text and "typical range" in text

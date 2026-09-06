@@ -36,7 +36,18 @@ def test_make_context_and_start(tmp_path):
     assert ctx.project.root.is_dir()
     assert ctx.explainer is not None
     orch = colab.start("demo", drive_root=str(tmp_path), llm=FakeLLM([]))
-    assert [s.name for s in orch.stages] == ["intake"]
+    assert [s.name for s in orch.stages] == ["intake", "data", "clean"]
+
+
+def test_context_snapshot_includes_data_meta_and_audit(tmp_path):
+    ctx = colab.make_context("demo", drive_root=str(tmp_path), llm=FakeLLM([]))
+    ctx.project.write_json("data_meta.json", {"target": "y"})
+    ctx.project.write_json(
+        "audit.json", {"issues": [{"kind": "missing_values"}], "decisions": [], "steps": []}
+    )
+    snap = ctx.explainer.context_provider()
+    assert snap["data_meta"] == {"target": "y"}
+    assert snap["audit_issue_kinds"] == ["missing_values"]
 
 
 def test_explain_uses_last_context(tmp_path, monkeypatch):

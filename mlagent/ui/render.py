@@ -17,7 +17,10 @@ CSS = """<style>
 .mlagent-msg { font-family: system-ui, sans-serif; line-height: 1.5; max-width: 60rem; }
 .mlagent-term { border-bottom: 1px dotted #2a7; color: #2a7; cursor: pointer; }
 .mlagent-term:hover { background: rgba(34,170,119,0.12); }
-.mlagent-explain { border-left: 3px solid #2a7; padding: 0.5rem 0.75rem; margin: 0.5rem 0; background: rgba(34,170,119,0.06); }
+.mlagent-explain {
+  border-left: 3px solid #2a7; padding: 0.5rem 0.75rem; margin: 0.5rem 0;
+  background: rgba(34,170,119,0.06);
+}
 </style>"""
 
 COLAB_CLICK_JS = f"""<script>
