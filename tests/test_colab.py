@@ -15,6 +15,21 @@ def test_setup_without_colab_adds_path_and_makes_dirs(tmp_path, monkeypatch):
     assert str(tmp_path) in sys.path
 
 
+def test_setup_prints_actionable_message_when_api_key_missing(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    colab.setup(drive_root=str(tmp_path), mount=False)
+    out = capsys.readouterr().out
+    assert "No ANTHROPIC_API_KEY found" in out
+    assert "Secrets panel" in out
+
+
+def test_setup_silent_when_api_key_present(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    colab.setup(drive_root=str(tmp_path), mount=False)
+    out = capsys.readouterr().out
+    assert "ANTHROPIC_API_KEY" not in out
+
+
 def test_make_context_and_start(tmp_path):
     ctx = colab.make_context("demo", drive_root=str(tmp_path), llm=FakeLLM([]))
     assert ctx.project.root == tmp_path / "projects" / "demo"

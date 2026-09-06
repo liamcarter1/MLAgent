@@ -1,6 +1,8 @@
 import json
 
-from mlagent.llm import FakeLLM
+import pytest
+
+from mlagent.llm import FakeLLM, LLMError
 from mlagent.prompts_io import load_prompt
 from mlagent.ui.explain import Explainer, Glossary
 
@@ -44,3 +46,27 @@ def test_explainer_refresh_reasks(tmp_path):
 def test_register_colab_callback_without_colab_returns_false(tmp_path):
     ex = Explainer(FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None)
     assert ex.register_colab_callback() is False
+
+
+def test_glossary_tolerates_corrupt_json_and_warns(tmp_path):
+    path = tmp_path / "glossary.json"
+    path.write_text('{"epoch": "one pass"', encoding="utf-8")
+    with pytest.warns(UserWarning, match="glossary.json"):
+        g = Glossary(path)
+    assert g.terms() == []
+    assert g.get("epoch") is None
+
+
+def test_on_click_surfaces_llm_error_instead_of_raising(tmp_path):
+    shown: list[str] = []
+    ex = Explainer(FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=shown.append)
+    ex._on_click("epoch")
+    assert len(shown) == 1
+    assert "epoch" in shown[0]
+    assert "Couldn't explain" in shown[0]
+
+
+def test_explain_raises_llm_error_when_script_exhausted(tmp_path):
+    ex = Explainer(FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None)
+    with pytest.raises(LLMError):
+        ex.explain("epoch")

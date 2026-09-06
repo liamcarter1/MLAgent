@@ -50,6 +50,11 @@ def setup(drive_root: str = config.DRIVE_ROOT, mount: bool = True) -> Path:
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     _load_api_key_from_secrets()
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            "No ANTHROPIC_API_KEY found. In Colab, open the Secrets panel (key icon), "
+            "add ANTHROPIC_API_KEY, and turn on notebook access; then rerun this cell."
+        )
     return projects
 
 
