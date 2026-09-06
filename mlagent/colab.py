@@ -67,7 +67,9 @@ def _context_snapshot(project: Project, stage_name: str = "") -> dict:
     }
 
 
-def make_context(project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None) -> StageContext:
+def make_context(
+    project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None
+) -> StageContext:
     global _LAST_CTX
     projects = setup(drive_root=drive_root, mount=False)
     project = Project(projects / project_name)
@@ -87,7 +89,9 @@ def make_context(project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LL
     return ctx
 
 
-def start(project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None) -> Orchestrator:
+def start(
+    project_name: str, drive_root: str = config.DRIVE_ROOT, llm: LLM | None = None
+) -> Orchestrator:
     ctx = make_context(project_name, drive_root=drive_root, llm=llm)
     ctx.explainer.register_colab_callback()
     return Orchestrator(ctx, [IntakeStage()])

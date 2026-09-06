@@ -4,7 +4,8 @@ from mlagent.ui import render
 def test_extract_and_strip_terms():
     text = "Lower the [[learning rate]] to stop [[overfitting]]; [[learning rate]] again."
     assert render.extract_terms(text) == ["learning rate", "overfitting"]
-    assert render.strip_terms(text) == "Lower the learning rate to stop overfitting; learning rate again."
+    stripped = "Lower the learning rate to stop overfitting; learning rate again."
+    assert render.strip_terms(text) == stripped
 
 
 def test_to_html_marks_terms_and_renders_markdown():

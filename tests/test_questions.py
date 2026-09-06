@@ -43,3 +43,17 @@ def test_scripted_records_and_exhausts():
     assert q.asked == ["Pick", "Say", "Ok?"]
     with pytest.raises(RuntimeError):
         q.text("more")
+
+
+def test_console_number_validates_and_reprompts():
+    q, printed = make_console(["abc", "50", "7"])
+    assert q.number("Rows?", default=10, minimum=1, maximum=20) == 7.0
+    assert sum("Please enter a number" in line for line in printed) == 2
+    q, _ = make_console([""])
+    assert q.number("Rows?", default=10) == 10.0
+
+
+def test_scripted_number_parses_and_defaults():
+    q = ScriptedQuestioner(["0.9", ""])
+    assert q.number("Target?") == 0.9
+    assert q.number("Rounds?", default=5) == 5.0

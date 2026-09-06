@@ -132,3 +132,18 @@ def test_ctx_stage_is_set_to_the_running_stage_name(project):
     orch = Orchestrator(ctx, [stage])
     orch.run()
     assert stage.captured == {"stage": "ctxstage"}
+
+
+def test_ctx_spec_reads_spec_or_raises(project):
+    from mlagent.spec import Spec, SpecError
+
+    ctx = make_ctx(project)
+    with pytest.raises(SpecError):
+        ctx.spec()
+    project.write_json("spec.json", {
+        "goal": "g", "task_type": "tabular_classification", "metric": "accuracy",
+        "target_value": 0.9, "data_source": "synthetic", "minutes_per_run": 5,
+        "max_rounds": 2, "gpu": "none", "notes": "",
+    })
+    assert isinstance(ctx.spec(), Spec)
+    assert ctx.spec().metric == "accuracy"

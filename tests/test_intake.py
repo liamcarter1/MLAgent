@@ -35,9 +35,11 @@ def test_collect_draft_maps_labels_to_codes():
 
 
 def test_intake_writes_spec_via_tool(project):
-    spec_fields = {"goal": "Predict customer churn from account data", "task_type": "tabular_classification",
-                    "metric": "accuracy", "target_value": 0.9, "data_source": "synthetic",
-                    "minutes_per_run": 10, "max_rounds": 5, "gpu": "none", "notes": "binary target"}
+    spec_fields = {
+        "goal": "Predict customer churn from account data", "task_type": "tabular_classification",
+        "metric": "accuracy", "target_value": 0.9, "data_source": "synthetic",
+        "minutes_per_run": 10, "max_rounds": 5, "gpu": "none", "notes": "binary target",
+    }
     llm = FakeLLM(script=[
         [("tool", "ask_user", {"question": "Is churn binary?", "options": ["yes", "no"]})],
         [("tool", "write_spec", spec_fields)],
@@ -68,7 +70,9 @@ def test_write_spec_tool_rejects_invalid_and_model_can_retry(project):
     bad = {"goal": "x", "task_type": "tabular_regression", "metric": "accuracy", "target_value": 1,
            "data_source": "synthetic", "minutes_per_run": 5, "max_rounds": 2, "gpu": "none"}
     good = {**bad, "metric": "rmse"}
-    llm = FakeLLM(script=[[("tool", "write_spec", bad)], [("tool", "write_spec", good)], [("text", "ok")]])
+    llm = FakeLLM(
+        script=[[("tool", "write_spec", bad)], [("tool", "write_spec", good)], [("text", "ok")]]
+    )
     ctx, _ = make_ctx(project, llm, ANSWERS)
     IntakeStage().run(ctx)
     assert Spec.from_dict(project.read_json("spec.json")).metric == "rmse"

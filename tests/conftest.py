@@ -1,8 +1,12 @@
-from pathlib import Path
+import matplotlib
 
-import pytest
+matplotlib.use("Agg")
 
-from mlagent.project import Project
+from pathlib import Path  # noqa: E402
+
+import pytest  # noqa: E402
+
+from mlagent.project import Project  # noqa: E402
 
 
 @pytest.fixture
