@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from pathlib import Path
 
@@ -40,6 +41,8 @@ def _check_value(key: str, value, rule: dict) -> str | None:
             return f"{key}: expected an integer, got {value!r}"
     elif not isinstance(value, int | float):
         return f"{key}: expected a number, got {value!r}"
+    if isinstance(value, float) and not math.isfinite(value):
+        return f"{key}: {value!r} is not a finite number"
     if rule.get("min") is not None and value < rule["min"]:
         return f"{key}: {value!r} is below the minimum {rule['min']}"
     if rule.get("max") is not None and value > rule["max"]:
@@ -64,16 +67,22 @@ def validate_config(config: dict, schema: dict) -> list[str]:
 
 
 def _cast(value, rule: dict):
+    if isinstance(value, bool):
+        raise TypeError("boolean")
     if value is None:
         return None
     if isinstance(value, str):
         value = float(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("not finite")
     return int(round(value)) if rule.get("type") == "integer" else float(value)
 
 
 def coerce_config(proposal: dict, schema: dict) -> tuple[dict, list[str]]:
     """Overlay a proposal on the defaults, clamping out-of-range values and dropping
     unknown keys. Notes describe every adjustment in plain words."""
+    if proposal is not None and not isinstance(proposal, dict):
+        return default_config(schema), ["Ignored proposal: expected an object of key -> value."]
     config = default_config(schema)
     notes: list[str] = []
     for key, value in (proposal or {}).items():

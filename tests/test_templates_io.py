@@ -58,3 +58,24 @@ def test_copy_template(project):
     assert all(p.exists() for p in paths)
     assert "load_data" in (project.root / "data.py").read_text(encoding="utf-8")
     assert not (project.root / "config_schema.json").exists()
+
+
+def test_validate_rejects_nan_and_inf():
+    schema = tio.load_schema("tabular_sklearn")
+    cfg = tio.default_config(schema)
+    cfg["learning_rate"] = float("nan")
+    assert any("learning_rate" in p for p in tio.validate_config(cfg, schema))
+    cfg["learning_rate"] = float("inf")
+    assert any("learning_rate" in p for p in tio.validate_config(cfg, schema))
+
+
+def test_coerce_drops_nan_bool_and_non_dict():
+    schema = tio.load_schema("tabular_sklearn")
+    cfg, notes = tio.coerce_config({"learning_rate": float("nan"), "seed": True}, schema)
+    assert cfg["learning_rate"] == 0.1 and cfg["seed"] == 42
+    assert any("learning_rate" in n for n in notes) and any("seed" in n for n in notes)
+    assert tio.validate_config(cfg, schema) == []
+    cfg, notes = tio.coerce_config(["not", "a", "dict"], schema)
+    assert cfg == tio.default_config(schema) and notes
+    cfg, notes = tio.coerce_config(None, schema)
+    assert cfg == tio.default_config(schema) and notes == []
