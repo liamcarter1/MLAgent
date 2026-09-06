@@ -80,11 +80,14 @@ def test_early_stopping_stops_before_all_epochs(clean_project):
 
 
 def test_dry_run_prints_timing_and_writes_nothing(clean_project):
-    root = install(clean_project, SMALL)
+    root = install(clean_project, SMALL)  # SMALL has iters_per_epoch: 3
     proc = run(root, "--dry-run")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     line = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert line["seconds_per_epoch"] >= 0 and line["n_train"] > 0
+    assert line["seconds_per_round"] >= 0 and line["n_train"] > 0
+    assert line["seconds_per_epoch"] >= line["seconds_per_round"]
+    # one dry-run round timed, then scaled by the configured iters_per_epoch (3)
+    assert line["seconds_per_epoch"] == round(line["seconds_per_round"] * 3, 4)
     assert not (root / "metrics.json").exists()
     assert not (root / "checkpoints" / "best.joblib").exists()
 
@@ -111,6 +114,48 @@ def test_eval_test_without_checkpoint_fails_clearly(clean_project):
     proc = run(root, "--eval-test")
     assert proc.returncode == 1
     assert "checkpoint" in (proc.stdout + proc.stderr).lower()
+
+
+def test_eval_test_with_explicit_checkpoint(regression_project):
+    root = install(regression_project, SMALL)
+    assert run(root).returncode == 0
+    # Copy the checkpoint under a different name and point --eval-test at it explicitly.
+    src = root / "checkpoints" / "best.joblib"
+    dst = root / "checkpoints" / "run1.joblib"
+    shutil.copy2(src, dst)
+    proc = run(root, "--eval-test", "--checkpoint", "checkpoints/run1.joblib")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (root / "eval_test.json").exists()
+
+
+def test_eval_test_with_missing_explicit_checkpoint_names_it(clean_project):
+    root = install(clean_project, SMALL)
+    proc = run(root, "--eval-test", "--checkpoint", "checkpoints/does_not_exist.joblib")
+    assert proc.returncode == 1
+    combined = (proc.stdout + proc.stderr)
+    assert "does_not_exist.joblib" in combined
+
+
+def test_failed_run_does_not_inherit_previous_run_metrics(clean_project):
+    """A successful run followed by a broken one must not report the earlier run's
+    epochs/best metric as the failed run's own (final-review finding F1)."""
+    root = install(clean_project, SMALL)
+    proc = run(root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    first = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert first["status"] == "done" and first["epochs"]
+
+    meta = clean_project.read_json("data_meta.json")
+    meta["target"] = "missing_column"
+    clean_project.write_json("data_meta.json", meta)
+    proc = run(root)
+    assert proc.returncode == 1
+
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["status"] == "failed"
+    assert metrics["best_epoch"] is None
+    assert metrics["best_val_metric"] is None
+    assert metrics["epochs"] == []
 
 
 def load_train_module():

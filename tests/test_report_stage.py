@@ -84,6 +84,49 @@ def test_eval_failure_is_shown(clean_project):
     assert any("KeyError" in s for s in shown)
 
 
+def test_report_evaluates_best_runs_checkpoint(clean_project):
+    """F2/F3: the report must evaluate the BEST run's checkpoint, not the last run's."""
+    from mlagent.runlog import best_run, read_runs
+
+    project = trained(clean_project)  # run 1
+    ctx = StageContext(project=project, llm=FakeLLM([]), questioner=ScriptedQuestioner(["y"]),
+                       explainer=None, display=lambda s: None)
+    cfg = project.read_json("config.json")
+    cfg.update({"epochs": 1, "iters_per_epoch": 1, "early_stopping_patience": 0})
+    project.write_json("config.json", cfg)
+    TrainStage(poll_seconds=0.05).run(ctx)  # run 2, worse/different config
+
+    runs = read_runs(project.runs_path)
+    assert len(runs) == 2
+    spec_metric = ctx.spec().metric
+    best = best_run(runs, spec_metric)
+    assert best is not None and best["checkpoint"]
+
+    recorded_args = []
+
+    def recording_runner(root, args, **kwargs):
+        recorded_args.append(args)
+        from mlagent.runner import run_script
+        return run_script(root, args, **kwargs)
+
+    ctx2, _shown = make_ctx(project)
+    stage = ReportStage(runner=recording_runner, poll_seconds=0.05)
+    stage.run(ctx2)
+    assert stage.is_complete(ctx2)
+    assert recorded_args == [["train.py", "--eval-test", "--checkpoint", best["checkpoint"]]]
+
+
+def test_run_number_sorts_numerically_not_lexicographically(clean_project):
+    from mlagent.stages.report import _run_number
+
+    plots_dir = clean_project.plots_dir
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("run2_training.png", "run10_training.png"):
+        (plots_dir / name).touch()
+    ordered = sorted(plots_dir.glob("run*_training.png"), key=_run_number)
+    assert [p.name for p in ordered] == ["run2_training.png", "run10_training.png"]
+
+
 def test_render_report_structure():
     runs = [{"run_id": 1, "status": "done", "epochs_run": 2, "best_epoch": 2,
              "best_val_metric": 0.8, "final_train_loss": 0.3, "final_val_loss": 0.5,

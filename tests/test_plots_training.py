@@ -45,6 +45,8 @@ def test_roc_pr_binary_has_no_legend_multiclass_has_one():
     p = p / p.sum(axis=1, keepdims=True)
     fig = plots.roc_pr_curves(y.tolist(), p.tolist(), ["a", "b"])
     assert len(fig.axes) == 2 and fig.axes[0].get_legend() is None
+    # F6: binary ROC title must not claim classes were truncated.
+    assert "showing" not in fig.axes[0].get_title(loc="left")
     plots.plt.close(fig)
     y3 = rng.integers(0, 3, size=60)
     p3 = rng.random((60, 3))

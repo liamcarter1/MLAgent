@@ -243,6 +243,7 @@ def present(fig: Figure, plots_dir: Path, name: str) -> Path:
 
 
 def _frame(ax, title: str) -> None:
+    ax.set_facecolor(SURFACE)
     ax.set_title(title, color=INK, fontsize=10, loc="left")
     ax.tick_params(colors=INK_2, labelsize=8)
     for side in ("top", "right"):
@@ -327,7 +328,7 @@ def roc_pr_curves(y_true, y_proba, labels: list[str]) -> Figure:
         precision, recall, _ = precision_recall_curve(positive, score)
         ax_pr.plot(recall, precision, color=colour, linewidth=2, label=label)
     ax_roc.plot([0, 1], [0, 1], color=AXIS, linestyle="--", linewidth=1)
-    suffix = f" (showing {len(curves)} of {n} classes)" if n > len(curves) else ""
+    suffix = f" (showing {len(curves)} of {n} classes)" if n > 2 and len(curves) < n else ""
     _frame(ax_roc, "ROC curve" + suffix)
     ax_roc.set_xlabel("false positive rate", color=INK_2, fontsize=8)
     ax_roc.set_ylabel("true positive rate", color=INK_2, fontsize=8)

@@ -4,6 +4,11 @@ Reads data_meta.json (target, task type, feature and categorical columns, split
 fractions) and data/clean/data.csv. Categorical columns are ordinal-encoded using
 the categories seen in the training split; unseen values become NaN, which
 HistGradientBoosting handles natively.
+
+The train/val/test split is seeded from data_meta.json's `split_seed` (default 42),
+never from config.json, so the held-out test split is the same for every run and a
+checkpoint's validation numbers stay comparable across tuning. config.json's `seed`
+only seeds the model (see model.py).
 """
 
 from __future__ import annotations
@@ -92,7 +97,7 @@ def load_data(project_dir: Path | str, config: dict) -> dict:
         y = pd.to_numeric(y, errors="raise").astype(float)
 
     splits = meta["splits"]
-    seed = int(config.get("seed", 42))
+    seed = int(meta.get("split_seed", 42))
     test_frac = float(splits["test"])
     val_frac = float(splits["val"]) / max(1e-9, 1.0 - test_frac)
     X_tv, X_test, y_tv, y_test = _split(X, y, test_frac, seed, classes is not None)

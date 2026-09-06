@@ -28,7 +28,7 @@ def make_ctx(project, llm=None, answers=()):
     return ctx, shown
 
 
-def test_real_training_run_logs_and_plots(clean_project):
+def test_real_training_run_logs_and_plots(clean_project, capsys):
     project = prepared(clean_project)
     llm = FakeLLM([[("text", "Best [[validation accuracy]] beat the target.")]])
     ctx, shown = make_ctx(project, llm)
@@ -41,6 +41,8 @@ def test_real_training_run_logs_and_plots(clean_project):
     assert len(runs) == 1 and runs[0]["status"] == "done" and runs[0]["run_id"] == 1
     assert runs[0]["epochs_run"] == 3 and runs[0]["best_val_metric"] is not None
     assert runs[0]["config"]["epochs"] == 3
+    assert runs[0]["checkpoint"] == "checkpoints/run1.joblib"
+    assert (project.checkpoints_dir / "run1.joblib").exists()
     assert project.metrics_path.exists() and project.exists("eval_val.json")
     names = sorted(p.name for p in project.plots_dir.glob("run1_*.png"))
     assert names == ["run1_training.png", "run1_val_confusion.png", "run1_val_per_class.png",
@@ -51,6 +53,8 @@ def test_real_training_run_logs_and_plots(clean_project):
     assert "cost" in text.lower() and "cpu" in text.lower()
     prompt = llm.calls[0]["messages"][0]["content"]
     assert "best_epoch" in prompt
+    # F8: subprocess stdout streams to the cell instead of being discarded.
+    assert "epoch 1/" in capsys.readouterr().out
 
 
 def test_failed_run_is_logged_and_stage_incomplete(clean_project):
@@ -104,6 +108,35 @@ def test_live_plotter_and_run_entry():
     assert entry["status"] == "done" and entry["epochs_run"] == 2
     assert entry["final_val_loss"] == 0.4 and entry["seconds"] == 1.5
     assert entry["applied_diff"] is None and entry["error"] is None
+    assert entry["checkpoint"] is None  # no checkpoint path passed
+    entry_with_checkpoint = build_run_entry(
+        {"epochs": 2}, result, "2026-09-06T10:00:00", checkpoint="checkpoints/run3.joblib"
+    )
+    assert entry_with_checkpoint["checkpoint"] == "checkpoints/run3.joblib"
+    failed_result = RunResult(returncode=1, expects_metrics=True, metrics={"status": "failed"})
+    failed_entry = build_run_entry(
+        {}, failed_result, "2026-09-06T10:00:00", checkpoint="checkpoints/run4.joblib"
+    )
+    assert failed_entry["checkpoint"] is None  # never recorded for a failed run
+
+
+def test_timeout_defaults_to_minutes_per_run_ceiling(clean_project):
+    project = prepared(clean_project)
+    calls = []
+
+    def fake_runner(root, **kwargs):
+        calls.append(kwargs)
+        return RunResult(returncode=1, metrics={"status": "failed", "epochs": [],
+                                                "error": "boom"},
+                         log_tail=[], seconds=0.1, expects_metrics=True)
+
+    ctx, _shown = make_ctx(project)
+    stage = TrainStage(runner=fake_runner)
+    stage.run(ctx)
+    assert len(calls) == 1
+    spec = ctx.spec()
+    assert spec.minutes_per_run == 5
+    assert calls[0]["timeout"] == max(60.0, spec.minutes_per_run * 60 * 3)
 
 
 def test_headline_tolerates_missing_best(clean_project):

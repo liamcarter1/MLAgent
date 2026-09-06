@@ -58,6 +58,7 @@ def write_clean_project(
         "feature_columns": FEATURES + ["colour"],
         "categorical_columns": ["colour"],
         "splits": {"train": 0.7, "val": 0.15, "test": 0.15},
+        "split_seed": 42,
     }
     if task_type == "tabular_classification":
         meta["n_classes"] = 2

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -35,10 +36,21 @@ def test_load_data_classification_splits_and_encoding(clean_project):
     codes = out["X_train"]["colour"].dropna().unique()
     assert set(codes) <= {0.0, 1.0, 2.0}
     assert all(np.issubdtype(dtype, np.floating) for dtype in out["X_train"].dtypes)
-    # deterministic for a seed, different for another
+    # The split is seeded from data_meta.json's split_seed, not config: two different
+    # config seeds give the SAME split (config.seed only seeds the model).
     again = data.load_data(clean_project.root, {"seed": 1})
     pd.testing.assert_frame_equal(out["X_test"], again["X_test"])
-    other = data.load_data(clean_project.root, {"seed": 2})
+    other_config_seed = data.load_data(clean_project.root, {"seed": 2})
+    assert out["X_test"].index.equals(other_config_seed["X_test"].index)
+
+
+def test_split_seed_from_meta_changes_the_split(clean_project):
+    data = load_module("data")
+    out = data.load_data(clean_project.root, {"seed": 1})
+    meta = json.loads((clean_project.root / "data_meta.json").read_text(encoding="utf-8"))
+    meta["split_seed"] = 999
+    (clean_project.root / "data_meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    other = data.load_data(clean_project.root, {"seed": 1})
     assert not out["X_test"].index.equals(other["X_test"].index)
 
 

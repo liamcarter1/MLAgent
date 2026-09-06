@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -25,6 +26,12 @@ def _fmt(value) -> str:
     if isinstance(value, float):
         return f"{value:.4g}"
     return str(value)
+
+
+def _run_number(path: Path) -> int:
+    """Parse the run id out of "run<N>_..." for numeric (not lexicographic) sorting."""
+    m = re.search(r"^run(\d+)_", path.name)
+    return int(m.group(1)) if m else 0
 
 
 def render_report(project_name: str, spec: dict, runs: list[dict], best: dict | None,
@@ -109,9 +116,13 @@ class ReportStage:
             ctx.display("Skipped. Rerun this stage when you have finished tuning.")
             return
 
+        args = ["train.py", "--eval-test"]
+        checkpoint = best.get("checkpoint")
+        if checkpoint and (project.root / checkpoint).exists():
+            args += ["--checkpoint", checkpoint]
         result = self.runner(
             project.root,
-            ["train.py", "--eval-test"],
+            args,
             python=self.python,
             timeout=self.timeout,
             poll_seconds=self.poll_seconds,
@@ -122,7 +133,7 @@ class ReportStage:
             return
         eval_test = project.read_json(EVAL_TEST_FILE) or {}
         test_figures = present_evaluation(eval_test, project.plots_dir, "test")
-        run_figures = sorted(project.plots_dir.glob("run*_training.png"))
+        run_figures = sorted(project.plots_dir.glob("run*_training.png"), key=_run_number)
 
         lessons = self._lessons(ctx, spec, runs, best, eval_test)
         report = render_report(

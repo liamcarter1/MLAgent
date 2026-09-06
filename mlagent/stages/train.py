@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -32,16 +33,29 @@ def _fmt(value) -> str:
     return str(value)
 
 
-def _ipython_display(fig: Figure) -> None:
-    try:
-        from IPython import get_ipython
-        from IPython.display import clear_output, display
-    except ImportError:
-        return
-    if get_ipython() is None:
-        return
-    clear_output(wait=True)
-    display(fig)
+class IPythonDisplay:
+    """Updates a single Colab display cell in place.
+
+    The first call creates a display handle; every later call updates that same
+    handle instead of `clear_output(wait=True)`, which would wipe the whole cell
+    transcript (intake questions, audit report, etc.) above the plot.
+    """
+
+    def __init__(self) -> None:
+        self._handle = None
+
+    def __call__(self, fig: Figure) -> None:
+        try:
+            from IPython import get_ipython
+            from IPython.display import display
+        except ImportError:
+            return
+        if get_ipython() is None:
+            return
+        if self._handle is None:
+            self._handle = display(fig, display_id=True)
+        else:
+            self._handle.update(fig)
 
 
 class LivePlotter:
@@ -50,7 +64,7 @@ class LivePlotter:
     def __init__(self, metric: str, display_fig: Callable[[Figure], None] | None = None):
         self.metric = metric
         self.updates = 0
-        self._display = display_fig or _ipython_display
+        self._display = display_fig or IPythonDisplay()
 
     def update(self, metrics: dict) -> None:
         self.updates += 1
@@ -64,7 +78,9 @@ class LivePlotter:
             plt.close(fig)
 
 
-def build_run_entry(config: dict, result: RunResult, started_at: str) -> dict:
+def build_run_entry(
+    config: dict, result: RunResult, started_at: str, checkpoint: str | None = None
+) -> dict:
     metrics = result.metrics or {}
     epochs = metrics.get("epochs") or []
     last = epochs[-1] if epochs else {}
@@ -85,6 +101,7 @@ def build_run_entry(config: dict, result: RunResult, started_at: str) -> dict:
         "seconds": result.seconds,
         "error": error,
         "applied_diff": None,
+        "checkpoint": checkpoint if result.ok else None,
     }
 
 
@@ -114,21 +131,35 @@ class TrainStage:
         if not isinstance(config, dict) or not all((project.root / f).exists() for f in CODE_FILES):
             raise RuntimeError("training project not found; run the codegen stage first")
         spec = ctx.spec()
+        timeout = self.timeout
+        if timeout is None:
+            timeout = max(60.0, spec.minutes_per_run * 60 * 3)
         ctx.display(
             "Training runs on the [[CPU]] for tabular data, so there is no [[compute unit]] "
-            "cost gate for this run. Watch the curves update each [[epoch]]."
+            "cost gate for this run. Watch the curves update each [[epoch]] (capped at "
+            f"{timeout / 60:.0f} minutes)."
         )
         started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         plotter = LivePlotter(spec.metric, display_fig=self.display_fig)
         result = self.runner(
             project.root,
-            on_line=lambda line: None,
+            on_line=lambda line: print(line, end=""),
             on_metrics=plotter.update,
             python=self.python,
-            timeout=self.timeout,
+            timeout=timeout,
             poll_seconds=self.poll_seconds,
         )
-        entry = append_run(project.runs_path, build_run_entry(config, result, started_at))
+        run_id = len(read_runs(project.runs_path)) + 1
+        checkpoint = None
+        if result.ok:
+            src = project.checkpoints_dir / "best.joblib"
+            if src.exists():
+                dst = project.checkpoints_dir / f"run{run_id}.joblib"
+                shutil.copy2(src, dst)
+                checkpoint = f"checkpoints/run{run_id}.joblib"
+        entry = append_run(
+            project.runs_path, build_run_entry(config, result, started_at, checkpoint)
+        )
         run_id = entry["run_id"]
         if not result.ok:
             tail = "".join(result.log_tail[-LOG_TAIL_SHOWN:]).rstrip()
