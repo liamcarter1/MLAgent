@@ -82,7 +82,11 @@ def run_script(
         nonlocal seen_epochs
         if metrics_path is None:
             return
-        data = read_json_file(metrics_path, default=None)
+        try:
+            data = read_json_file(metrics_path, default=None)
+        except OSError:
+            # Windows: os.replace can conflict with an open read; treat as not readable yet.
+            return
         if not isinstance(data, dict):
             return
         n = len(data.get("epochs") or [])
@@ -116,7 +120,11 @@ def run_script(
 
     proc.wait()
     poll_metrics()
-    metrics = read_json_file(metrics_path, default=None) if metrics_path is not None else None
+    try:
+        # Windows: os.replace can conflict with an open read; fall back to None.
+        metrics = read_json_file(metrics_path, default=None) if metrics_path is not None else None
+    except OSError:
+        metrics = None
     return RunResult(
         returncode=proc.returncode,
         metrics=metrics if isinstance(metrics, dict) else None,

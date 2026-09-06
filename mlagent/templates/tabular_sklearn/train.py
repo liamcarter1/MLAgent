@@ -55,7 +55,17 @@ def write_json(path: Path, obj) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(json.dumps(obj, indent=2, sort_keys=True))
-    os.replace(tmp, path)
+    # Windows: os.replace can fail with PermissionError if a poller has the target open; retry.
+    attempts = 20
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+            time.sleep(0.05)
 
 
 def compute_metric(name: str, y_true, y_pred) -> float:

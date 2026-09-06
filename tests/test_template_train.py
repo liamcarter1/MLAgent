@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -111,27 +112,52 @@ def test_eval_test_without_checkpoint_fails_clearly(clean_project):
     assert "checkpoint" in (proc.stdout + proc.stderr).lower()
 
 
-def test_full_proba_handles_class_absent_from_training():
+def load_train_module():
+    """Import train.py as a standalone module (it is not a package member)."""
     template_dir = Path("mlagent/templates/tabular_sklearn").resolve()
     sys.path.insert(0, str(template_dir))
     try:
         spec = importlib.util.spec_from_file_location("train_module", template_dir / "train.py")
         train_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(train_module)
-
-        X = np.random.default_rng(0).random((20, 2))
-        y = np.array([0, 1] * 10)
-        model = HistGradientBoostingClassifier(max_iter=2, random_state=0)
-        model.fit(X, y)
-
-        result = train_module.evaluate(
-            model, X, y, "tabular_classification", "accuracy", n_classes=3
-        )
-
-        assert np.isfinite(result["loss"]), "loss should be finite"
-        y_proba = np.array(result["y_proba"])
-        assert y_proba.shape == (20, 3), "proba should have 20 rows, 3 classes"
-        row_sums = y_proba.sum(axis=1)
-        assert np.allclose(row_sums, 1.0, atol=1e-6), "proba rows should sum to 1"
+        return train_module
     finally:
         sys.path.pop(0)
+
+
+def test_full_proba_handles_class_absent_from_training():
+    train_module = load_train_module()
+    X = np.random.default_rng(0).random((20, 2))
+    y = np.array([0, 1] * 10)
+    model = HistGradientBoostingClassifier(max_iter=2, random_state=0)
+    model.fit(X, y)
+
+    result = train_module.evaluate(
+        model, X, y, "tabular_classification", "accuracy", n_classes=3
+    )
+
+    assert np.isfinite(result["loss"]), "loss should be finite"
+    y_proba = np.array(result["y_proba"])
+    assert y_proba.shape == (20, 3), "proba should have 20 rows, 3 classes"
+    row_sums = y_proba.sum(axis=1)
+    assert np.allclose(row_sums, 1.0, atol=1e-6), "proba rows should sum to 1"
+
+
+def test_write_json_retries_on_permission_error(tmp_path, monkeypatch):
+    train_module = load_train_module()
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError("simulated Windows replace-while-open race")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(train_module.os, "replace", flaky_replace)
+    target = tmp_path / "m.json"
+    train_module.write_json(target, {"a": 1})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1}
+    assert calls["n"] == 3
+    assert list(tmp_path.glob("*.tmp")) == []
