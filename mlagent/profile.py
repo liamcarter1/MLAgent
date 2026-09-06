@@ -13,7 +13,9 @@ MAX_CATEGORIES = 20
 
 def _py(value: Any) -> Any:
     """Convert numpy scalars to plain Python; NaN becomes None."""
-    if value is None:
+    if value is None or value is pd.NA:
+        return None
+    if pd.isna(value) and isinstance(value, float):
         return None
     if hasattr(value, "item"):
         value = value.item()
@@ -61,13 +63,22 @@ def _target_info(name: str, s: pd.Series) -> dict:
             "counts": {str(k): int(v) for k, v in counts.items()},
         }
     vals = s.dropna()
+    if not vals.empty:
+        return {
+            "name": name,
+            "kind": "numeric",
+            "min": _py(vals.min()),
+            "max": _py(vals.max()),
+            "mean": _py(round(float(vals.mean()), 6)),
+            "std": _py(round(float(vals.std()), 6)) if len(vals) > 1 else 0.0,
+        }
     return {
         "name": name,
         "kind": "numeric",
-        "min": _py(vals.min()),
-        "max": _py(vals.max()),
-        "mean": _py(round(float(vals.mean()), 6)),
-        "std": _py(round(float(vals.std()), 6)) if len(vals) > 1 else 0.0,
+        "min": None,
+        "max": None,
+        "mean": None,
+        "std": None,
     }
 
 
@@ -86,6 +97,10 @@ def profile_dataframe(df: pd.DataFrame, target: str | None = None) -> dict:
 
 
 def profile_markdown(profile: dict) -> str:
+    def _escape_pipe(s: str) -> str:
+        """Escape pipes in markdown table cells."""
+        return s.replace("|", "\\|")
+
     lines = [
         f"### Data profile: {profile['n_rows']} rows × {profile['n_cols']} columns "
         f"({profile['duplicate_rows']} duplicate rows, {profile['memory_mb']} MB)",
@@ -95,9 +110,13 @@ def profile_markdown(profile: dict) -> str:
     ]
     for c in profile["columns"]:
         sample = ", ".join(c["sample"])[:60]
-        lines.append(
-            f"| {c['name']} | {c['dtype']} | {c['missing_pct']}% | {c['n_unique']} | {sample} |"
+        escaped_name = _escape_pipe(c["name"])
+        escaped_sample = _escape_pipe(sample)
+        row = (
+            f"| {escaped_name} | {c['dtype']} | {c['missing_pct']}% | "
+            f"{c['n_unique']} | {escaped_sample} |"
         )
+        lines.append(row)
     t = profile.get("target")
     if t:
         lines.append("")
