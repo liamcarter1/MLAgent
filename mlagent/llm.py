@@ -66,7 +66,7 @@ class AnthropicLLM:
         if client is None:
             import anthropic
 
-            client = anthropic.Anthropic()
+            client = anthropic.Anthropic(max_retries=3)
         self.client = client
         self.model = model
         self.max_tokens = max_tokens
@@ -78,17 +78,19 @@ class AnthropicLLM:
         tool_calls: list[tuple[str, dict]] = []
         last_text = ""
         for _ in range(self.max_rounds):
-            response = self.client.beta.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=system,
-                messages=history,
-                tools=[t.to_api() for t in tools],
-                thinking={"type": "adaptive"},
-                output_config={"effort": self.effort},
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-            )
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "system": system,
+                "messages": history,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": self.effort},
+                "betas": ["server-side-fallback-2026-07-01"],
+                "fallbacks": "default",
+            }
+            if tools:
+                kwargs["tools"] = [t.to_api() for t in tools]
+            response = self.client.beta.messages.create(**kwargs)
             texts = [b.text for b in response.content if b.type == "text"]
             if texts:
                 last_text = "\n".join(texts)

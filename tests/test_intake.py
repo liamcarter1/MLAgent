@@ -80,6 +80,24 @@ def test_is_complete_false_for_corrupt_spec(project):
     assert IntakeStage().is_complete(ctx) is False
 
 
+def test_intake_falls_back_to_draft_when_llm_errors(project):
+    llm = FakeLLM(script=[])  # empty script -> LLMError on first .run()
+    ctx, shown = make_ctx(project, llm, ANSWERS)
+    IntakeStage().run(ctx)
+    saved = Spec.from_dict(project.read_json("spec.json"))
+    assert saved.goal.startswith("Predict customer churn")
+    assert any("Couldn't reach Claude" in s for s in shown)
+
+
+def test_intake_persists_draft_before_calling_llm(project):
+    llm = FakeLLM(script=[])
+    ctx, _ = make_ctx(project, llm, ANSWERS)
+    IntakeStage().run(ctx)
+    draft = project.read_json("draft_spec.json")
+    assert draft is not None
+    assert draft["goal"].startswith("Predict customer churn")
+
+
 def test_is_complete_false_for_truncated_spec_json(project):
     (project.root / "spec.json").write_text('{"goal": "cats", "task_type": ', encoding="utf-8")
     ctx, _ = make_ctx(project, FakeLLM([]), [])

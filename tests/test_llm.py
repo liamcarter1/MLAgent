@@ -1,3 +1,4 @@
+import sys
 import types
 
 import pytest
@@ -96,6 +97,7 @@ def test_anthropic_llm_end_turn_returns_text():
     assert call["betas"] == ["server-side-fallback-2026-07-01"]
     assert call["fallbacks"] == "default"
     assert "tool_choice" not in call
+    assert "tools" not in call
 
 
 def test_anthropic_llm_runs_multiple_tools_then_finishes():
@@ -139,6 +141,7 @@ def test_anthropic_llm_runs_multiple_tools_then_finishes():
     assert tool_results[1]["tool_use_id"] == "id2"
     assert tool_results[1]["is_error"] is True
     assert tool_results[1]["content"].startswith("Error:")
+    assert [t["name"] for t in client.calls[0]["tools"]] == ["good", "bad"]
 
 
 def test_anthropic_llm_pause_turn_continues_loop():
@@ -170,6 +173,21 @@ def test_anthropic_llm_max_tokens_raises():
 
     with pytest.raises(LLMError):
         llm.run(system="sys", messages=[{"role": "user", "content": "hi"}], tools=[])
+
+
+def test_anthropic_llm_constructs_default_client_with_max_retries(monkeypatch):
+    captured: dict = {}
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_module = types.SimpleNamespace(Anthropic=FakeAnthropic)
+    monkeypatch.setitem(sys.modules, "anthropic", fake_module)
+
+    AnthropicLLM()
+
+    assert captured == {"max_retries": 3}
 
 
 def test_anthropic_llm_max_rounds_exhausted_raises():

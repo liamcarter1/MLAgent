@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from mlagent import config
-from mlagent.llm import ToolSpec
+from mlagent.llm import LLMError, ToolSpec
 from mlagent.prompts_io import load_prompt
 from mlagent.spec import DATA_SOURCES, GPU_CHOICES, METRICS_FOR_TASK, TASK_TYPES, Spec, SpecError
 from mlagent.stages.base import StageContext
@@ -107,6 +107,7 @@ class IntakeStage:
 
     def run(self, ctx: StageContext) -> None:
         draft = collect_draft(ctx.questioner)
+        ctx.project.write_json("draft_spec.json", draft)
         written: dict = {}
         followups = {"n": 0}
 
@@ -153,15 +154,20 @@ class IntakeStage:
             ),
         ]
         prompt = "Interview answers (draft spec):\n" + json.dumps(draft, indent=2, sort_keys=True)
-        result = ctx.llm.run(system=load_prompt("intake"), messages=[{"role": "user", "content": prompt}],
-                             tools=tools)
+        result = None
+        try:
+            result = ctx.llm.run(system=load_prompt("intake"), messages=[{"role": "user", "content": prompt}],
+                                 tools=tools)
+        except LLMError as exc:
+            ctx.display(f"Couldn't reach Claude ({exc}); saved your answers as the spec.")
         if not written:
             spec = Spec.from_dict(draft)
             problems = spec.validate()
             if problems:
                 raise SpecError("draft spec invalid: " + "; ".join(problems))
             ctx.project.write_json(config.SPEC_FILE, spec.to_dict())
-        if result.text:
-            ctx.display(result.text)
-        else:
-            ctx.display("Spec saved. Next: obtaining the [[training data]].")
+        if result is not None:
+            if result.text:
+                ctx.display(result.text)
+            else:
+                ctx.display("Spec saved. Next: obtaining the [[training data]].")
