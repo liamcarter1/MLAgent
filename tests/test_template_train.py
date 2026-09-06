@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+TEMPLATE = Path("mlagent/templates/tabular_sklearn").resolve()
+CODE_FILES = ("data.py", "model.py", "train.py")
+
+
+def install(project, config: dict) -> Path:
+    for name in CODE_FILES:
+        shutil.copy(TEMPLATE / name, project.root / name)
+    project.write_json("config.json", config)
+    return project.root
+
+
+def run(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "train.py", *args], cwd=root, capture_output=True, text=True,
+        encoding="utf-8", timeout=120,
+    )
+
+
+SMALL = {"epochs": 4, "iters_per_epoch": 3, "learning_rate": 0.2, "seed": 1,
+         "early_stopping_patience": 0}
+
+
+def test_classification_run_writes_metrics_checkpoint_and_eval(clean_project):
+    root = install(clean_project, SMALL)
+    proc = run(root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["status"] == "done"
+    assert metrics["metric"] == "accuracy" and metrics["higher_is_better"] is True
+    assert [e["epoch"] for e in metrics["epochs"]] == [1, 2, 3, 4]
+    assert all(e["train_loss"] > 0 and e["val_loss"] > 0 for e in metrics["epochs"])
+    assert 1 <= metrics["best_epoch"] <= 4
+    assert metrics["best_val_metric"] == max(e["val_metric"] for e in metrics["epochs"])
+    assert metrics["seconds_per_epoch"] > 0
+    assert (root / "checkpoints" / "best.joblib").exists()
+    ev = json.loads((root / "eval_val.json").read_text(encoding="utf-8"))
+    assert ev["split"] == "val" and ev["task_type"] == "tabular_classification"
+    assert len(ev["y_true"]) == len(ev["y_pred"]) == len(ev["y_proba"]) == metrics["n_val"]
+    assert len(ev["y_proba"][0]) == 2
+    assert "epoch 4/4" in proc.stdout
+    assert not (root / "eval_test.json").exists()
+
+
+def test_regression_run_and_eval_test(regression_project):
+    root = install(regression_project, SMALL)
+    assert run(root).returncode == 0
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["metric"] == "rmse" and metrics["higher_is_better"] is False
+    assert metrics["best_val_metric"] == min(e["val_metric"] for e in metrics["epochs"])
+    proc = run(root, "--eval-test")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    ev = json.loads((root / "eval_test.json").read_text(encoding="utf-8"))
+    assert ev["split"] == "test" and ev["y_proba"] is None
+    assert len(ev["y_true"]) == metrics["n_test"]
+    assert ev["value"] > 0
+
+
+def test_early_stopping_stops_before_all_epochs(clean_project):
+    # A huge learning rate on a tiny model plateaus quickly; patience 1 must stop early.
+    root = install(clean_project, {**SMALL, "epochs": 30, "learning_rate": 1.0,
+                                   "max_leaf_nodes": 2, "early_stopping_patience": 1})
+    assert run(root).returncode == 0
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["stopped_early"] is True
+    assert len(metrics["epochs"]) < 30
+
+
+def test_dry_run_prints_timing_and_writes_nothing(clean_project):
+    root = install(clean_project, SMALL)
+    proc = run(root, "--dry-run")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    line = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert line["seconds_per_epoch"] >= 0 and line["n_train"] > 0
+    assert not (root / "metrics.json").exists()
+    assert not (root / "checkpoints" / "best.joblib").exists()
+
+
+def test_failure_is_recorded_in_metrics(clean_project):
+    root = install(clean_project, SMALL)
+    meta = clean_project.read_json("data_meta.json")
+    meta["target"] = "missing_column"
+    clean_project.write_json("data_meta.json", meta)
+    proc = run(root)
+    assert proc.returncode == 1
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["status"] == "failed"
+    assert "missing_column" in metrics["error"]
+
+
+def test_eval_test_without_checkpoint_fails_clearly(clean_project):
+    root = install(clean_project, SMALL)
+    proc = run(root, "--eval-test")
+    assert proc.returncode == 1
+    assert "checkpoint" in (proc.stdout + proc.stderr).lower()
