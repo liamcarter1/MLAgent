@@ -1,9 +1,12 @@
 import json
+import sys
+import types
 
 import pytest
 
 from mlagent.llm import FakeLLM, LLMError
 from mlagent.prompts_io import load_prompt
+from mlagent.ui import render
 from mlagent.ui.explain import Explainer, Glossary
 
 
@@ -70,3 +73,36 @@ def test_explain_raises_llm_error_when_script_exhausted(tmp_path):
     ex = Explainer(FakeLLM([]), Glossary(tmp_path / "g.json"), context_provider=dict, display=lambda s: None)
     with pytest.raises(LLMError):
         ex.explain("epoch")
+
+
+def test_register_colab_callback_wires_click_to_explain(tmp_path):
+    registered: dict = {}
+
+    def register_callback(name, fn):
+        registered["name"] = name
+        registered["fn"] = fn
+
+    google_mod = types.ModuleType("google")
+    colab_mod = types.ModuleType("google.colab")
+    output_mod = types.ModuleType("google.colab.output")
+    output_mod.register_callback = register_callback
+    colab_mod.output = output_mod
+    google_mod.colab = colab_mod
+
+    sys.modules["google"] = google_mod
+    sys.modules["google.colab"] = colab_mod
+    sys.modules["google.colab.output"] = output_mod
+    try:
+        llm = FakeLLM(script=[[("text", "An [[epoch]] is one pass.")]])
+        shown: list[str] = []
+        ex = Explainer(llm, Glossary(tmp_path / "g.json"), context_provider=dict, display=shown.append)
+
+        assert ex.register_colab_callback() is True
+        assert registered["name"] == render.EXPLAIN_CALLBACK_NAME
+
+        registered["fn"]("epoch")
+        assert shown and "epoch" in shown[0]
+    finally:
+        del sys.modules["google"]
+        del sys.modules["google.colab"]
+        del sys.modules["google.colab.output"]
