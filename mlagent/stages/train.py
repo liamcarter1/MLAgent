@@ -24,6 +24,14 @@ EVAL_VAL_FILE = "eval_val.json"
 LOG_TAIL_SHOWN = 15
 
 
+def _fmt(value) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
+
+
 def _ipython_display(fig: Figure) -> None:
     try:
         from IPython import get_ipython
@@ -153,7 +161,7 @@ class TrainStage:
         }
         headline = (
             f"Run {entry['run_id']} finished: best validation {spec.metric} "
-            f"{entry['best_val_metric']:.4g} at epoch {entry['best_epoch']} "
+            f"{_fmt(entry['best_val_metric'])} at epoch {_fmt(entry['best_epoch'])} "
             f"(target {spec.target_value:g})."
         )
         try:

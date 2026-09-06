@@ -104,3 +104,11 @@ def test_live_plotter_and_run_entry():
     assert entry["status"] == "done" and entry["epochs_run"] == 2
     assert entry["final_val_loss"] == 0.4 and entry["seconds"] == 1.5
     assert entry["applied_diff"] is None and entry["error"] is None
+
+
+def test_headline_tolerates_missing_best(clean_project):
+    ctx, _shown = make_ctx(clean_project, FakeLLM([]))
+    spec = ctx.spec()
+    entry = {"run_id": 1, "best_val_metric": None, "best_epoch": None}
+    text = TrainStage()._debrief(ctx, spec, entry, {}, {}, [])
+    assert "Run 1" in text

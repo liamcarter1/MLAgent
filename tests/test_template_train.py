@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from sklearn.ensemble import HistGradientBoostingClassifier
 
 TEMPLATE = Path("mlagent/templates/tabular_sklearn").resolve()
@@ -161,3 +162,18 @@ def test_write_json_retries_on_permission_error(tmp_path, monkeypatch):
     assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1}
     assert calls["n"] == 3
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_write_json_cleans_temp_file_when_retries_exhausted(tmp_path, monkeypatch):
+    train_module = load_train_module()
+
+    def always_raises(src, dst):
+        raise PermissionError("simulated persistent Windows replace-while-open race")
+
+    monkeypatch.setattr(train_module.os, "replace", always_raises)
+    monkeypatch.setattr(train_module.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(PermissionError):
+        train_module.write_json(tmp_path / "m.json", {"a": 1})
+
+    assert list(tmp_path.iterdir()) == []

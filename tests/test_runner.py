@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import textwrap
 
+import pytest
+
 from mlagent import runner
 
 EPOCH_SCRIPT = textwrap.dedent(
@@ -64,6 +66,34 @@ def test_poll_tolerates_unreadable_metrics(tmp_path, monkeypatch):
     result = runner.run_training(tmp_path, on_metrics=updates.append, poll_seconds=0.05)
     assert result.ok
     assert len(updates) >= 1
+
+
+def test_final_metrics_read_retries_then_raises(tmp_path, monkeypatch):
+    (tmp_path / "train.py").write_text(EPOCH_SCRIPT, encoding="utf-8")
+
+    def always_raises(path, default=None):
+        raise PermissionError("simulated persistent Windows replace-while-open race")
+
+    monkeypatch.setattr(runner, "read_json_file", always_raises)
+    with pytest.raises(PermissionError):
+        runner.run_training(tmp_path, poll_seconds=0.05)
+
+
+def test_final_metrics_read_recovers_after_transient_error(tmp_path, monkeypatch):
+    (tmp_path / "train.py").write_text(EPOCH_SCRIPT, encoding="utf-8")
+    real_read_json_file = runner.read_json_file
+    calls = {"n": 0}
+
+    def flaky_read_json_file(path, default=None):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError("simulated Windows replace-while-open race")
+        return real_read_json_file(path, default=default)
+
+    monkeypatch.setattr(runner, "read_json_file", flaky_read_json_file)
+    result = runner.run_training(tmp_path, poll_seconds=0.05)
+    assert result.ok
+    assert result.metrics["status"] == "done"
 
 
 def test_ok_requires_done_status_when_metrics_expected(tmp_path):

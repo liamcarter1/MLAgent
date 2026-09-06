@@ -120,11 +120,19 @@ def run_script(
 
     proc.wait()
     poll_metrics()
-    try:
-        # Windows: os.replace can conflict with an open read; fall back to None.
-        metrics = read_json_file(metrics_path, default=None) if metrics_path is not None else None
-    except OSError:
-        metrics = None
+    metrics = None
+    if metrics_path is not None:
+        # The process has exited, so nothing else should hold the file open; a persistent
+        # OSError here is a real failure, not a transient Windows replace-while-open race.
+        attempts = 20
+        for attempt in range(attempts):
+            try:
+                metrics = read_json_file(metrics_path, default=None)
+                break
+            except OSError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.05)
     return RunResult(
         returncode=proc.returncode,
         metrics=metrics if isinstance(metrics, dict) else None,
