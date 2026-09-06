@@ -237,3 +237,183 @@ def present(fig: Figure, plots_dir: Path, name: str) -> Path:
     _show(fig)
     plt.close(fig)
     return path
+
+
+# --- Milestone 3: training and evaluation figures -------------------------------------
+
+
+def _frame(ax, title: str) -> None:
+    ax.set_facecolor(SURFACE)
+    ax.set_title(title, color=INK, fontsize=10, loc="left")
+    ax.tick_params(colors=INK_2, labelsize=8)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(AXIS)
+    ax.grid(True, color=GRID, linewidth=0.6)
+    ax.set_axisbelow(True)
+
+
+def _legend(ax) -> None:
+    ax.legend(frameon=False, fontsize=8, labelcolor=INK_2)
+
+
+def training_curves(epochs: list[dict], metric: str) -> Figure:
+    """Loss (left) and the target metric (right) per epoch, train vs validation."""
+    fig, (ax_loss, ax_metric) = plt.subplots(1, 2, figsize=(9, 3.2))
+    xs = [e.get("epoch") for e in epochs]
+    panels = (
+        (ax_loss, ("train_loss", "val_loss"), "Loss per epoch"),
+        (ax_metric, ("train_metric", "val_metric"), f"{metric} per epoch"),
+    )
+    for ax, keys, title in panels:
+        for key, colour, label in zip(keys, SERIES[:2], ("train", "validation"), strict=True):
+            ax.plot(xs, [e.get(key) for e in epochs], color=colour, linewidth=2,
+                    marker="o", markersize=4, label=label)
+        _frame(ax, title)
+        ax.set_xlabel("epoch", color=INK_2, fontsize=8)
+        _legend(ax)
+    if not epochs:
+        ax_loss.text(0.5, 0.5, "no epochs yet", ha="center", va="center", color=MUTED,
+                     transform=ax_loss.transAxes)
+    fig.tight_layout()
+    return fig
+
+
+def confusion_matrix_plot(cm, labels: list[str]) -> Figure:
+    m = np.asarray(cm)
+    n = len(labels)
+    size = min(2.5 + 0.35 * n, 9)
+    fig, ax = plt.subplots(figsize=(size, size))
+    cmap = LinearSegmentedColormap.from_list("mlagent_seq", SEQUENTIAL)
+    ax.imshow(m, cmap=cmap)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(labels, rotation=45, ha="right", color=INK_2, fontsize=8)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(labels, color=INK_2, fontsize=8)
+    ax.set_xlabel("predicted", color=INK_2, fontsize=8)
+    ax.set_ylabel("actual", color=INK_2, fontsize=8)
+    if n <= 20 and m.size:
+        threshold = m.max() / 2
+        for i in range(n):
+            for j in range(n):
+                ax.text(j, i, str(int(m[i, j])), ha="center", va="center", fontsize=8,
+                        color=SURFACE if m[i, j] > threshold else INK)
+    ax.set_title("Confusion matrix", color=INK, fontsize=10, loc="left")
+    fig.tight_layout()
+    return fig
+
+
+def roc_pr_curves(y_true, y_proba, labels: list[str]) -> Figure:
+    """ROC (left) and precision-recall (right). Binary: one curve for the positive class.
+    Multiclass: one-vs-rest per class, at most len(SERIES) classes shown."""
+    from sklearn.metrics import precision_recall_curve, roc_curve
+
+    y = np.asarray(y_true)
+    p = np.asarray(y_proba, dtype=float)
+    fig, (ax_roc, ax_pr) = plt.subplots(1, 2, figsize=(9, 3.6))
+    n = p.shape[1] if p.ndim == 2 else 1
+    if n == 2:
+        curves = [(1, p[:, 1], labels[1])]
+    else:
+        curves = [(k, p[:, k], labels[k]) for k in range(min(n, len(SERIES)))]
+    drawn = 0
+    for (k, score, label), colour in zip(curves, SERIES, strict=False):
+        positive = (y == k).astype(int)
+        if positive.sum() in (0, len(positive)):
+            continue
+        drawn += 1
+        fpr, tpr, _ = roc_curve(positive, score)
+        ax_roc.plot(fpr, tpr, color=colour, linewidth=2, label=label)
+        precision, recall, _ = precision_recall_curve(positive, score)
+        ax_pr.plot(recall, precision, color=colour, linewidth=2, label=label)
+    ax_roc.plot([0, 1], [0, 1], color=AXIS, linestyle="--", linewidth=1)
+    suffix = f" (showing {len(curves)} of {n} classes)" if n > 2 and len(curves) < n else ""
+    _frame(ax_roc, "ROC curve" + suffix)
+    ax_roc.set_xlabel("false positive rate", color=INK_2, fontsize=8)
+    ax_roc.set_ylabel("true positive rate", color=INK_2, fontsize=8)
+    _frame(ax_pr, "Precision-recall curve")
+    ax_pr.set_xlabel("recall", color=INK_2, fontsize=8)
+    ax_pr.set_ylabel("precision", color=INK_2, fontsize=8)
+    if drawn > 1:
+        _legend(ax_roc)
+        _legend(ax_pr)
+    fig.tight_layout()
+    return fig
+
+
+def per_class_bars(y_true, y_pred, labels: list[str]) -> Figure:
+    from sklearn.metrics import precision_recall_fscore_support
+
+    n = len(labels)
+    precision, recall, _, _ = precision_recall_fscore_support(
+        y_true, y_pred, labels=list(range(n)), zero_division=0
+    )
+    fig, ax = plt.subplots(figsize=(max(4.0, 0.6 * n + 2), 3.2))
+    x = np.arange(n)
+    width = 0.38
+    ax.bar(x - width / 2, precision, width=width, color=SERIES[0], label="precision")
+    ax.bar(x + width / 2, recall, width=width, color=SERIES[1], label="recall")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45 if n > 6 else 0, ha="right" if n > 6 else "center",
+                       color=INK_2, fontsize=8)
+    ax.set_ylim(0, 1.05)
+    _frame(ax, "Precision and recall per class")
+    _legend(ax)
+    fig.tight_layout()
+    return fig
+
+
+def predicted_vs_actual(y_true, y_pred) -> Figure:
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(y_pred, dtype=float)
+    fig, ax = plt.subplots(figsize=(4.2, 4.2))
+    ax.scatter(y, p, s=14, color=SERIES[0], alpha=0.7, edgecolors="none")
+    lo, hi = float(min(y.min(), p.min())), float(max(y.max(), p.max()))
+    ax.plot([lo, hi], [lo, hi], color=AXIS, linestyle="--", linewidth=1)
+    _frame(ax, "Predicted vs actual")
+    ax.set_xlabel("actual", color=INK_2, fontsize=8)
+    ax.set_ylabel("predicted", color=INK_2, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def residual_plots(y_true, y_pred) -> Figure:
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(y_pred, dtype=float)
+    residuals = y - p
+    fig, (ax_hist, ax_scatter) = plt.subplots(1, 2, figsize=(9, 3.4))
+    ax_hist.hist(residuals, bins=min(30, max(5, len(residuals) // 5)), color=SERIES[0])
+    _frame(ax_hist, "Residual distribution")
+    ax_hist.set_xlabel("actual - predicted", color=INK_2, fontsize=8)
+    ax_scatter.scatter(p, residuals, s=14, color=SERIES[0], alpha=0.7, edgecolors="none")
+    ax_scatter.axhline(0, color=AXIS, linestyle="--", linewidth=1)
+    _frame(ax_scatter, "Residuals vs predicted")
+    ax_scatter.set_xlabel("predicted", color=INK_2, fontsize=8)
+    ax_scatter.set_ylabel("residual", color=INK_2, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def present_evaluation(eval_data: dict, plots_dir: Path, prefix: str) -> list[Path]:
+    """Save and show the evaluation figures appropriate to the task; return saved paths."""
+    y_true = list(eval_data.get("y_true") or [])
+    y_pred = list(eval_data.get("y_pred") or [])
+    saved: list[Path] = []
+    if eval_data.get("task_type") == "tabular_classification":
+        from sklearn.metrics import confusion_matrix
+
+        classes = eval_data.get("classes") or sorted({*y_true, *y_pred})
+        labels = [str(c) for c in classes]
+        cm = confusion_matrix(y_true, y_pred, labels=list(range(len(labels))))
+        saved.append(present(confusion_matrix_plot(cm, labels), plots_dir, f"{prefix}_confusion"))
+        if eval_data.get("y_proba"):
+            fig = roc_pr_curves(y_true, eval_data["y_proba"], labels)
+            saved.append(present(fig, plots_dir, f"{prefix}_roc_pr"))
+        saved.append(present(per_class_bars(y_true, y_pred, labels), plots_dir,
+                             f"{prefix}_per_class"))
+    else:
+        saved.append(present(predicted_vs_actual(y_true, y_pred), plots_dir,
+                             f"{prefix}_pred_vs_actual"))
+        saved.append(present(residual_plots(y_true, y_pred), plots_dir, f"{prefix}_residuals"))
+    return saved

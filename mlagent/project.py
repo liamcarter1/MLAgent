@@ -63,6 +63,22 @@ class Project:
         return self.root / config.GLOSSARY_FILE
 
     @property
+    def config_path(self) -> Path:
+        return self.root / config.CONFIG_FILE
+
+    @property
+    def runs_path(self) -> Path:
+        return self.root / config.RUNS_FILE
+
+    @property
+    def metrics_path(self) -> Path:
+        return self.root / config.METRICS_FILE
+
+    @property
+    def report_path(self) -> Path:
+        return self.root / config.REPORT_FILE
+
+    @property
     def data_raw(self) -> Path:
         return self.root / "data" / "raw"
 
