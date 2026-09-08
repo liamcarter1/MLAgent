@@ -298,3 +298,63 @@ def test_legacy_single_phase_stages_still_run(project):
     orch = Orchestrator(make_ctx(project), [a, b])
     assert orch.run() == ["a", "b"]
     assert orch.waiting() is None
+
+
+class SlowLegacyStage:
+    """A legacy stage whose `run` only completes it the second time it is called."""
+
+    name = "slow"
+
+    def __init__(self):
+        self.runs = 0
+
+    def run(self, ctx: StageContext) -> None:
+        self.runs += 1
+        if self.runs >= 2:
+            ctx.project.write_json(f"{self.name}.json", {"ok": True})
+
+    def is_complete(self, ctx: StageContext) -> bool:
+        return ctx.project.exists(f"{self.name}.json")
+
+
+def test_legacy_stage_that_fails_to_complete_can_be_rerun(project):
+    stage = SlowLegacyStage()
+    shown: list[str] = []
+    orch = Orchestrator(make_ctx(project, display=shown.append), [stage])
+    assert orch.run() == []
+    assert stage.runs == 1
+    assert any("did not finish" in s for s in shown)
+    assert orch.run() == ["slow"]
+    assert stage.runs == 2
+    assert orch.completed() == ["slow"]
+
+
+class SlowTwoPhaseStage:
+    """A two-phase stage with no handoff whose `prepare` completes it the second time."""
+
+    name = "slow2"
+
+    def __init__(self):
+        self.prepared = 0
+
+    def prepare(self, ctx: StageContext) -> None:
+        self.prepared += 1
+        if self.prepared >= 2:
+            ctx.project.write_json(f"{self.name}.json", {"ok": True})
+        return None
+
+    def debrief(self, ctx: StageContext) -> None:
+        return None
+
+    def is_complete(self, ctx: StageContext) -> bool:
+        return ctx.project.exists(f"{self.name}.json")
+
+
+def test_two_phase_stage_with_no_handoff_that_fails_to_complete_can_be_rerun(project):
+    stage = SlowTwoPhaseStage()
+    orch = Orchestrator(make_ctx(project), [stage])
+    assert orch.run() == []
+    assert stage.prepared == 1
+    assert orch.run() == ["slow2"]
+    assert stage.prepared == 2
+    assert orch.completed() == ["slow2"]

@@ -118,8 +118,9 @@ class Orchestrator:
                     self.ctx.display(f"**Stage: {stage.name}**")
                     handoff = stage_prepare(stage, self.ctx)
                     state = self._state()
-                    state["prepared"] = [*state["prepared"], stage.name]
                     state["handoff"] = handoff.to_dict() if handoff is not None else None
+                    if handoff is not None:
+                        state["prepared"] = [*state["prepared"], stage.name]
                     self._save(state)
                 if handoff is not None and not stage_outputs_ready(stage, self.ctx, handoff):
                     self.ctx.display(waiting_message(handoff))
