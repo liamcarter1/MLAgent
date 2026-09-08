@@ -104,7 +104,12 @@ class Orchestrator:
             state = self._state()
             done = stage.name in state["completed"]
             forced = stage.name in state["forced"]
-            if not done and not forced and stage.is_complete(self.ctx):
+            prepared = stage.name in state["prepared"]
+            # Only take this shortcut for a stage we have not started a handoff for in this
+            # session (e.g. artifacts already on disk from an earlier run). A stage with a
+            # pending handoff must still go through debrief() below even once its outputs
+            # exist on disk, so the user sees the debrief and the stage is recorded as run.
+            if not done and not forced and not prepared and stage.is_complete(self.ctx):
                 self.mark_complete(stage.name)
                 done = True
             if not done:

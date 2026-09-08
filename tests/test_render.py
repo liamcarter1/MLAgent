@@ -50,3 +50,36 @@ def test_to_html_does_not_linkify_inline_code():
 
 def test_colab_click_js_uses_explain_callback_name_constant():
     assert render.EXPLAIN_CALLBACK_NAME in render.COLAB_CLICK_JS
+
+
+def test_figure_html_embeds_the_png_and_renders_the_caption(tmp_path):
+    from mlagent.ui.render import figure_html
+
+    png = tmp_path / "raw_histograms.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    html = figure_html(png, "Each [[histogram]] shows one column.")
+    assert "data:image/png;base64," in html
+    assert "<figure" in html and "</figure>" in html
+    assert 'data-term="histogram"' in html
+    assert "raw_histograms.png" in html  # the filename is shown as the figure's label
+
+
+def test_figure_html_without_a_caption_and_for_a_missing_file(tmp_path):
+    from mlagent.ui.render import figure_html
+
+    png = tmp_path / "x.png"
+    png.write_bytes(b"\x89PNG")
+    assert "<figcaption" not in figure_html(png)
+    missing = figure_html(tmp_path / "nope.png", "caption")
+    assert "nope.png" in missing and "data:image/png" not in missing
+
+
+def test_display_figure_passes_html_to_ipython(tmp_path, monkeypatch):
+    from mlagent.ui import render
+
+    png = tmp_path / "test_confusion.png"
+    png.write_bytes(b"\x89PNG")
+    captured = []
+    monkeypatch.setattr(render, "_display", lambda obj: captured.append(obj))
+    render.display_figure(png, "Rows are the true label.")
+    assert captured and "figure" in captured[0].data

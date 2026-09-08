@@ -41,11 +41,31 @@ ANSWERS = [
 ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "report"]
 
 
+def advance(orch, project, limit=12):
+    """Run the orchestrator, running each handoff's cells as the user would."""
+    import subprocess
+    import sys
+
+    ran: list[str] = []
+    for _ in range(limit):
+        ran += orch.run()
+        handoff = orch.waiting()
+        if handoff is None:
+            return ran
+        for command in handoff.commands:
+            result = subprocess.run(
+                [sys.executable, *command], cwd=str(project.root),
+                capture_output=True, text=True, encoding="utf-8",
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+    raise AssertionError("pipeline did not settle")
+
+
 class AutoApproveQuestioner(ScriptedQuestioner):
     """Like ScriptedQuestioner, but every confirm() is approved without consuming
     a scripted answer (the number of audit fixes varies with the data)."""
 
-    def confirm(self, question: str, default: bool = True) -> bool:
+    def confirm(self, question: str, default: bool = True, key: str | None = None) -> bool:
         self.asked.append(question)
         return True
 
@@ -65,7 +85,7 @@ def make_orchestrator(project, answers):
 
 def test_full_pipeline_runs_and_is_reproducible_and_resumable(project):
     orch = make_orchestrator(project, list(ANSWERS))
-    ran = orch.run()
+    ran = advance(orch, project)
     assert ran == ALL_STAGES
 
     # Artifacts from every stage exist.
