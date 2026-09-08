@@ -5,8 +5,8 @@ Run it from the project folder:
     python profile.py                                     profile the raw data
     python profile.py --input data/clean/data.csv --tag clean
 
-Writes `profile_{tag}.json` and PNGs into `plots/`. Imports only pandas, numpy and
-matplotlib, so you can run it anywhere the project folder exists.
+Writes `profile_{tag}.json` and PNGs into `plots/`. Imports only pandas and matplotlib,
+so you can run it anywhere the project folder exists.
 """
 
 from __future__ import annotations
@@ -289,9 +289,16 @@ def draw_all(df: pd.DataFrame, profile: dict, plots_dir: Path, tag: str) -> list
 
 # --- command line ---
 def cli_argv() -> list[str]:
-    """Arguments when run as a script; nothing when the notebook kernel runs this file."""
+    """Arguments when run as a script or via `%run`; nothing under a bare ipykernel cell.
+
+    A real Jupyter/Colab kernel sets `sys.argv[0]` to `.../ipykernel_launcher.py`, which
+    also ends in `.py`, so checking the extension alone would treat the kernel's own
+    `-f <connection-file>.json` flags as ours and crash `argparse`. `%run script.py --flag`
+    is different: there argv[0] is the script name, not the launcher, so its flags are
+    still parsed.
+    """
     name = Path(sys.argv[0]).name.lower() if sys.argv else ""
-    if not name.endswith(".py"):
+    if name.startswith("ipykernel"):
         return []
     return sys.argv[1:]
 

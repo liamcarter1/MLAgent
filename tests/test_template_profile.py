@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pandas as pd
 
 from mlagent.profile import profile_dataframe
 from mlagent.templates_io import COMMON_FILES, copy_common
+
+TEMPLATE = Path("mlagent/templates/common").resolve()
+
+
+def load_module(name: str):
+    spec = importlib.util.spec_from_file_location(f"tpl_common_{name}", TEMPLATE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[f"tpl_common_{name}"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_profile(project, args=()):
@@ -64,3 +76,16 @@ def test_profile_script_has_walkthrough_sections_and_an_argv_guard(project):
     assert "def cli_argv()" in source
     assert "sys.exit(0)" not in source
     assert source.count("\n# --- ") >= 5
+
+
+def test_cli_argv_ignores_ipykernel_launcher_but_parses_run_and_script_argv(monkeypatch):
+    module = load_module("profile")
+
+    monkeypatch.setattr(sys, "argv", ["/x/ipykernel_launcher.py", "-f", "k.json"])
+    assert module.cli_argv() == []
+
+    monkeypatch.setattr(sys, "argv", ["profile.py", "--tag", "clean"])
+    assert module.cli_argv() == ["--tag", "clean"]
+
+    monkeypatch.setattr(sys, "argv", ["profile.py"])
+    assert module.cli_argv() == []
