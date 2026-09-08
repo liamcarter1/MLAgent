@@ -79,3 +79,12 @@ def test_coerce_drops_nan_bool_and_non_dict():
     assert cfg == tio.default_config(schema) and notes
     cfg, notes = tio.coerce_config(None, schema)
     assert cfg == tio.default_config(schema) and notes == []
+
+
+def test_common_files_are_locatable_and_copied(tmp_path):
+    assert tio.COMMON_DIR.is_dir()
+    assert tio.common_file("profile.py").exists()
+    written = tio.copy_common(tio.COMMON_FILES, tmp_path)
+    assert [p.name for p in written] == list(tio.COMMON_FILES)
+    with pytest.raises(FileNotFoundError):
+        tio.common_file("no_such_script.py")

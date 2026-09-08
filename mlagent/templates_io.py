@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -14,6 +15,10 @@ TEMPLATE_FOR_TASK = {
     "tabular_classification": "tabular_sklearn",
     "tabular_regression": "tabular_sklearn",
 }
+
+COMMON_DIRNAME = "common"
+COMMON_DIR = TEMPLATES_DIR / COMMON_DIRNAME
+COMMON_FILES = ("profile.py",)
 
 
 def template_dir(name: str) -> Path:
@@ -119,5 +124,24 @@ def copy_template(name: str, project_root: Path) -> list[Path]:
     for filename in CODE_FILES:
         target = Path(project_root) / filename
         shutil.copyfile(src / filename, target)
+        written.append(target)
+    return written
+
+
+def common_file(name: str) -> Path:
+    """Path to a shared template script (`profile.py`, `clean.py`)."""
+    path = COMMON_DIR / name
+    if not path.is_file():
+        raise FileNotFoundError(f"no common template named {name!r} under {COMMON_DIR}")
+    return path
+
+
+def copy_common(names: Sequence[str], project_root: Path) -> list[Path]:
+    """Copy shared scripts into the project folder, overwriting; return the paths."""
+    written: list[Path] = []
+    for filename in names:
+        target = Path(project_root) / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(common_file(filename), target)
         written.append(target)
     return written
