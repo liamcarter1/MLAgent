@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
-CODE_FILES = ("data.py", "model.py", "train.py")
+CODE_FILES = ("data.py", "model.py", "train.py", "evaluate.py")
 SCHEMA_FILE = "config_schema.json"
 TEMPLATE_FOR_TASK = {
     "tabular_classification": "tabular_sklearn",

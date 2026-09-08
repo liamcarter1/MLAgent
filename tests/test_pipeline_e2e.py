@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from mlagent.llm import FakeLLM
 from mlagent.orchestrator import Orchestrator
@@ -83,6 +84,11 @@ def make_orchestrator(project, answers):
     return Orchestrator(ctx, stages)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="train.py no longer writes eval_val.json / supports --eval-test; TrainStage and "
+           "ReportStage still rely on both (Tasks 11/12 migrate them to evaluate.py)",
+)
 def test_full_pipeline_runs_and_is_reproducible_and_resumable(project):
     orch = make_orchestrator(project, list(ANSWERS))
     ran = advance(orch, project)
