@@ -133,3 +133,37 @@ def test_intake_asks_the_learning_level_and_stores_it(project):
     IntakeStage().run(ctx)
     assert project.read_json("spec.json")["learning_level"] == "beginner"
     assert project.read_json("draft_spec.json")["learning_level"] == "beginner"
+
+
+def test_write_spec_tool_keeps_users_learning_level_when_model_omits_it(project):
+    spec_fields_no_level = {
+        "goal": "Predict customer churn from account data", "task_type": "tabular_classification",
+        "metric": "accuracy", "target_value": 0.9, "data_source": "synthetic",
+        "minutes_per_run": 10, "max_rounds": 5, "gpu": "none",
+    }
+    llm = FakeLLM(script=[
+        [("tool", "write_spec", spec_fields_no_level)],
+        [("text", "ok")],
+    ])
+    answers = list(ANSWERS)
+    answers[1] = "Beginner - explain everything as we go"
+    ctx, _ = make_ctx(project, llm, answers)
+    IntakeStage().run(ctx)
+    assert project.read_json("spec.json")["learning_level"] == "beginner"
+
+
+def test_write_spec_tool_keeps_models_own_learning_level_when_given(project):
+    spec_fields_with_level = {
+        "goal": "Predict customer churn from account data", "task_type": "tabular_classification",
+        "metric": "accuracy", "target_value": 0.9, "data_source": "synthetic",
+        "minutes_per_run": 10, "max_rounds": 5, "gpu": "none", "learning_level": "expert",
+    }
+    llm = FakeLLM(script=[
+        [("tool", "write_spec", spec_fields_with_level)],
+        [("text", "ok")],
+    ])
+    answers = list(ANSWERS)
+    answers[1] = "Beginner - explain everything as we go"
+    ctx, _ = make_ctx(project, llm, answers)
+    IntakeStage().run(ctx)
+    assert project.read_json("spec.json")["learning_level"] == "expert"

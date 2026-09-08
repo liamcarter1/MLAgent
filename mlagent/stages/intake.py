@@ -145,6 +145,8 @@ class IntakeStage:
             return ctx.questioner.text(inp["question"])
 
         def write_spec(inp: dict) -> str:
+            if not str(inp.get("learning_level") or "").strip():
+                inp = {**inp, "learning_level": draft["learning_level"]}
             try:
                 spec = Spec.from_dict(inp)
             except SpecError as exc:
