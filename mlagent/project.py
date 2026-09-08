@@ -79,6 +79,10 @@ class Project:
         return self.root / config.REPORT_FILE
 
     @property
+    def report_meta_path(self) -> Path:
+        return self.root / config.REPORT_META_FILE
+
+    @property
     def data_raw(self) -> Path:
         return self.root / "data" / "raw"
 

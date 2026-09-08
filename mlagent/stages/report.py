@@ -78,6 +78,12 @@ def render_report(project_name: str, spec: dict, runs: list[dict], best: dict | 
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _load_runs_and_best(project, spec) -> tuple[list[dict], dict | None]:
+    """The one place that decides "the best run": shared by `is_complete` and `run`."""
+    runs = read_runs(project.runs_path)
+    return runs, best_run(runs, spec.metric)
+
+
 class ReportStage:
     name = "report"
 
@@ -94,20 +100,55 @@ class ReportStage:
         self.poll_seconds = poll_seconds
 
     def is_complete(self, ctx: StageContext) -> bool:
-        return ctx.project.report_path.exists()
+        project = ctx.project
+        if not (project.report_path.exists() and project.exists(EVAL_TEST_FILE)):
+            return False
+        meta = project.read_json(cfg.REPORT_META_FILE)
+        if not isinstance(meta, dict) or "best_run" not in meta:
+            return False
+        _runs, best = _load_runs_and_best(project, ctx.spec())
+        if best is None:
+            return False
+        return meta["best_run"] == best.get("run_id")
 
     def run(self, ctx: StageContext) -> None:
         project = ctx.project
         spec = ctx.spec()
-        runs = read_runs(project.runs_path)
-        best = best_run(runs, spec.metric)
+        runs, best = _load_runs_and_best(project, spec)
         if best is None:
             ctx.display("No successful training run yet; run the train stage first.")
             return
+        best_run_id = best["run_id"]
+        existing_eval_test = project.read_json(EVAL_TEST_FILE)
+        meta = project.read_json(cfg.REPORT_META_FILE)
+        meta_best = meta.get("best_run") if isinstance(meta, dict) else None
+
+        if existing_eval_test is not None and meta_best == best_run_id:
+            ctx.display(
+                f"The test set was already evaluated for run {best_run_id}; rewriting the "
+                "report with the current run history."
+            )
+            self._write_report(ctx, project, spec, runs, best, existing_eval_test)
+            return
+
+        if existing_eval_test is None:
+            detail = (
+                "The [[test set]] has been untouched until now; evaluating on it once gives "
+                "an honest estimate of real-world performance."
+            )
+        elif meta_best is None:
+            detail = (
+                "An earlier test evaluation exists but its run is unknown; run "
+                f"{best_run_id} is the best model, so it will be evaluated once more."
+            )
+        else:
+            detail = (
+                f"The test set was last evaluated for run {meta_best}; run {best_run_id} is now "
+                "the best model, so it needs evaluating once more."
+            )
         ctx.display(
-            f"The best run so far is run {best['run_id']} with validation {spec.metric} "
-            f"{_fmt(best.get('best_val_metric'))}. The [[test set]] has been untouched until now; "
-            "evaluating on it once gives an honest estimate of real-world performance."
+            f"The best run so far is run {best_run_id} with validation {spec.metric} "
+            f"{_fmt(best.get('best_val_metric'))}. {detail}"
         )
         if not ctx.questioner.confirm(
             "Evaluate the best model on the held-out test set now and write the report?",
@@ -132,6 +173,10 @@ class ReportStage:
             ctx.display(f"Test evaluation failed. Last lines of output:\n\n```\n{tail}\n```")
             return
         eval_test = project.read_json(EVAL_TEST_FILE) or {}
+        self._write_report(ctx, project, spec, runs, best, eval_test)
+
+    def _write_report(self, ctx: StageContext, project, spec, runs: list[dict], best: dict,
+                       eval_test: dict) -> None:
         test_figures = present_evaluation(eval_test, project.plots_dir, "test")
         run_figures = sorted(project.plots_dir.glob("run*_training.png"), key=_run_number)
 
@@ -141,6 +186,9 @@ class ReportStage:
             eval_test, lessons, run_figures + test_figures,
         )
         project.report_path.write_text(report, encoding="utf-8")
+        project.write_json(
+            cfg.REPORT_META_FILE, {"best_run": best["run_id"], "n_runs": len(runs)}
+        )
         ctx.display(
             f"Test {spec.metric}: **{_fmt(eval_test.get('value'))}** "
             f"(target {spec.target_value:g}).\n\n{lessons}\n\n"

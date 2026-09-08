@@ -17,6 +17,7 @@ CONFIG_FILE = "config.json"
 RUNS_FILE = "runs.jsonl"
 METRICS_FILE = "metrics.json"
 REPORT_FILE = "report.md"
+REPORT_META_FILE = "report_meta.json"
 
 # Colab compute-unit consumption per hour by GPU. Conservative defaults;
 # the cost gate asks the user to confirm the live figure from Colab's Resources panel.

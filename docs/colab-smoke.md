@@ -33,6 +33,18 @@ Prerequisite: a project that has completed the Milestone 2 checklist (clean data
    validation evaluation figures; the debrief mentions the best epoch.
 4. The report stage asks before touching the test set. Answer "y". `eval_test.json` and
    `report.md` appear in the project folder; open `report.md` in Drive and check the figures render.
-5. Run the "Train again" cell. A second run is logged as run 2 and the report is rewritten.
-6. Disconnect and reconnect the runtime, rerun the setup and start cells: the orchestrator reports
-   nothing to do.
+5. Run the "Train again" cell. A second run is logged as run 2. Re-run the report stage: if run 2
+   is not better than run 1, the report is rewritten with both runs' history without asking about
+   the test set again (the test split is evaluated once per best model). If run 2 became the new
+   best run, the stage asks again before evaluating it on the test set.
+6. Disconnect and reconnect the runtime, rerun the setup and start cells: the orchestrator prints
+   "Nothing to do: all stages complete."
+
+### Known Colab quirk
+
+Occasionally the first question box after a stage banner never appears in Colab: the cell shows
+the bold stage line, a blank tall output area, and interrupting shows a `KeyboardInterrupt` inside
+ipykernel's `_input_request`. This is caused by Colab's frontend, not `mlagent`. Fix: Runtime >
+Restart session, rerun the install and setup cells, then run `start` again. Never rely on a
+`time.sleep` before `input()` to work around this: in testing that made `input()` return
+immediately with no box shown at all.

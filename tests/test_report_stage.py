@@ -127,6 +127,110 @@ def test_run_number_sorts_numerically_not_lexicographically(clean_project):
     assert [p.name for p in ordered] == ["run2_training.png", "run10_training.png"]
 
 
+def test_report_meta_records_best_run_after_success(clean_project):
+    project = trained(clean_project)
+    llm = FakeLLM([[("text", "Lessons here.")]])
+    ctx, _ = make_ctx(project, llm)
+    stage = ReportStage(poll_seconds=0.05)
+    stage.run(ctx)
+    assert stage.is_complete(ctx)
+    meta = project.read_json("report_meta.json")
+    assert meta["best_run"] == 1
+    assert meta["n_runs"] == 1
+
+
+def test_better_run_after_report_makes_stage_incomplete_and_declining_leaves_it_incomplete(
+    clean_project,
+):
+    from mlagent.runlog import append_run
+
+    project = trained(clean_project)  # run 1
+    llm = FakeLLM([[("text", "Lessons for run 1.")]])
+    ctx, _ = make_ctx(project, llm)
+    stage = ReportStage(poll_seconds=0.05)
+    stage.run(ctx)
+    assert stage.is_complete(ctx)
+    run1 = project.read_json("report_meta.json")
+    assert run1["best_run"] == 1
+
+    # A better run 2 appears (accuracy is "higher is better" for this fixture's spec).
+    append_run(project.runs_path, {"status": "done", "best_val_metric": 0.99, "config": {}})
+    assert not stage.is_complete(ctx)
+
+    # Declining the re-evaluation leaves the stage incomplete and the report untouched.
+    ctx2, shown2 = make_ctx(project, answers=["n"])
+    stage.run(ctx2)
+    assert not stage.is_complete(ctx2)
+    assert any("last evaluated for run 1" in s and "run 2 is now the best model" in s
+               for s in shown2)
+    assert not any("untouched" in s for s in shown2)
+
+
+def test_worse_run_keeps_complete_and_rewrites_without_asking_or_evaluating(clean_project):
+    from mlagent.runlog import append_run
+
+    project = trained(clean_project)  # run 1
+    llm = FakeLLM([[("text", "Lessons for run 1.")]])
+    ctx, _ = make_ctx(project, llm)
+    stage = ReportStage(poll_seconds=0.05)
+    stage.run(ctx)
+    assert stage.is_complete(ctx)
+    meta_before = project.read_json("report_meta.json")
+    assert meta_before["n_runs"] == 1
+
+    # A worse run 2 appears; run 1 stays best.
+    append_run(project.runs_path, {"status": "done", "best_val_metric": 0.01, "config": {}})
+    assert stage.is_complete(ctx)
+
+    def failing_runner(root, args, **kwargs):
+        raise AssertionError("eval runner must not be invoked when the best run is unchanged")
+
+    ctx2, shown2 = make_ctx(project, llm=FakeLLM([[("text", "Lessons for both runs.")]]),
+                             answers=[])  # no answers available: confirm must not be called
+    stage2 = ReportStage(runner=failing_runner, poll_seconds=0.05)
+    stage2.run(ctx2)
+    assert stage2.is_complete(ctx2)
+    assert any("already evaluated for run 1" in s for s in shown2)
+    meta_after = project.read_json("report_meta.json")
+    assert meta_after["best_run"] == 1
+    assert meta_after["n_runs"] == 2
+    report = project.report_path.read_text(encoding="utf-8")
+    assert "| 1 |" in report and "| 2 |" in report
+
+
+def test_missing_meta_with_existing_eval_test_says_run_unknown(clean_project):
+    from mlagent.runlog import append_run
+
+    project = trained(clean_project)  # run 1
+    llm = FakeLLM([[("text", "Lessons for run 1.")]])
+    ctx, _ = make_ctx(project, llm)
+    stage = ReportStage(poll_seconds=0.05)
+    stage.run(ctx)
+    assert stage.is_complete(ctx)
+
+    # Simulate a project created before report_meta.json existed: eval_test.json is
+    # present but there is no sidecar recording which run it belongs to.
+    project.report_meta_path.unlink()
+
+    # A better run 2 appears.
+    append_run(project.runs_path, {"status": "done", "best_val_metric": 0.99, "config": {}})
+
+    ctx2, shown2 = make_ctx(project, answers=["n"])
+    stage.run(ctx2)
+    assert not any("run None" in s for s in shown2)
+    assert any("run is unknown" in s for s in shown2)
+    assert not any("untouched" in s for s in shown2)
+
+
+def test_confirm_wording_says_untouched_only_when_no_eval_test(clean_project):
+    project = trained(clean_project)
+    ctx, shown = make_ctx(project, answers=["n"])
+    stage = ReportStage()
+    stage.run(ctx)
+    assert any("untouched" in s for s in shown)
+    assert not any("last evaluated for run" in s for s in shown)
+
+
 def test_render_report_structure():
     runs = [{"run_id": 1, "status": "done", "epochs_run": 2, "best_epoch": 2,
              "best_val_metric": 0.8, "final_train_loss": 0.3, "final_val_loss": 0.5,
