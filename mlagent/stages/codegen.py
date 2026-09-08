@@ -19,6 +19,8 @@ from mlagent.templates_io import (
     coerce_config,
     copy_template,
     load_schema,
+    model_types,
+    schema_for,
     validate_config,
 )
 
@@ -107,9 +109,10 @@ class CodegenStage:
         try:
             spec = ctx.spec()
             schema = load_schema(TEMPLATE_FOR_TASK[spec.task_type])
-        except Exception:  # noqa: BLE001 - missing spec or unsupported task: not complete
+            flat = schema_for(schema, str(config.get("model_type", "")))
+        except Exception:  # noqa: BLE001 - missing spec, unknown model or task: not complete
             return False
-        return validate_config(config, schema) == []
+        return validate_config(config, flat) == []
 
     def prepare(self, ctx: StageContext) -> None:
         spec = ctx.spec()
@@ -126,7 +129,8 @@ class CodegenStage:
             ctx.display("The data is not ready for training:\n- " + "\n- ".join(problems))
             return
 
-        schema = load_schema(template)
+        nested = load_schema(template)
+        schema = schema_for(nested, model_types(nested)[0])
         proposal, rationale = self._propose(ctx, spec, meta, schema)
         config, notes = coerce_config(proposal, schema)
         written = copy_template(template, ctx.project.root)

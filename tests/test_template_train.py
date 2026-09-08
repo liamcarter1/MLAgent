@@ -30,8 +30,10 @@ def run(root: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-SMALL = {"epochs": 4, "iters_per_epoch": 3, "learning_rate": 0.2, "seed": 1,
-         "early_stopping_patience": 0}
+SMALL = {"model_type": "gradient_boosting", "epochs": 4, "iters_per_epoch": 3,
+         "learning_rate": 0.2, "seed": 1, "early_stopping_patience": 0,
+         "max_leaf_nodes": 31, "max_depth": None, "min_samples_leaf": 20,
+         "l2_regularization": 0.0}
 
 
 def test_classification_run_writes_metrics_checkpoint_and_eval(clean_project):

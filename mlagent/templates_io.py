@@ -35,6 +35,24 @@ def load_schema(name: str) -> dict:
     return json.loads((template_dir(name) / SCHEMA_FILE).read_text(encoding="utf-8"))
 
 
+def model_types(schema: dict) -> list[str]:
+    return list((schema.get("models") or {}).keys())
+
+
+def schema_for(schema: dict, model_type: str) -> dict:
+    """The flat rules for one model family: the common keys plus that family's keys.
+
+    Everything downstream — `default_config`, `validate_config`, `coerce_config`, the
+    codegen proposal and Milestone 5's tuner — works on this flat form.
+    """
+    models = schema.get("models") or {}
+    if model_type not in models:
+        raise ValueError(
+            f"unknown model_type {model_type!r}; expected one of {sorted(models)}"
+        )
+    return {**(schema.get("common") or {}), **models[model_type]}
+
+
 def default_config(schema: dict) -> dict:
     return {key: rule.get("default") for key, rule in schema.items()}
 
@@ -42,6 +60,13 @@ def default_config(schema: dict) -> dict:
 def _check_value(key: str, value, rule: dict) -> str | None:
     if value is None:
         return None if rule.get("nullable") else f"{key}: must not be null"
+    if rule.get("type") == "choice":
+        choices = list(rule.get("choices") or [])
+        if not isinstance(value, str):
+            return f"{key}: expected one of {choices}, got {value!r}"
+        if value not in choices:
+            return f"{key}: {value!r} is not one of {choices}"
+        return None
     if isinstance(value, bool):
         return f"{key}: expected a number, got a boolean"
     if rule.get("type") == "integer":
@@ -98,6 +123,15 @@ def coerce_config(proposal: dict, schema: dict) -> tuple[dict, list[str]]:
             notes.append(f"Ignored unknown key {key!r}.")
             continue
         rule = schema[key]
+        if rule.get("type") == "choice":
+            choices = list(rule.get("choices") or [])
+            if isinstance(value, str) and value in choices:
+                config[key] = value
+            else:
+                notes.append(
+                    f"Ignored {key}={value!r}: not one of {choices}; kept {config[key]!r}."
+                )
+            continue
         try:
             cast = _cast(value, rule)
         except (TypeError, ValueError):

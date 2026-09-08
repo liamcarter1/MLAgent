@@ -23,7 +23,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 from data import load_data
-from model import build_model, grow
+from model import build_model
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -192,9 +192,7 @@ def train(project_dir: Path, dry_run: bool = False) -> dict:
     started = time.time()
     for epoch in range(1, epochs + 1):
         t0 = time.time()
-        if epoch > 1:
-            grow(model, iters)
-        model.fit(data["X_train"], data["y_train"])
+        model.fit_epoch(data["X_train"], data["y_train"])
         tr = evaluate(model, data["X_train"], data["y_train"], task_type, metric, n_classes)
         va = evaluate(model, data["X_val"], data["y_val"], task_type, metric, n_classes)
         row = {

@@ -110,3 +110,14 @@ def test_is_complete_requires_valid_config(clean_project):
     clean_project.write_json("config.json", cfg)
     assert not stage.is_complete(ctx)
     assert json.loads(clean_project.config_path.read_text(encoding="utf-8"))["learning_rate"] == 99
+
+
+def test_config_is_flat_for_the_chosen_model(clean_project):
+    from mlagent.templates_io import load_schema, schema_for, validate_config
+
+    ctx, _shown = make_ctx(clean_project, FakeLLM([]), ["y"])
+    CodegenStage().prepare(ctx)
+    cfg = clean_project.read_json("config.json")
+    schema = schema_for(load_schema("tabular_sklearn"), cfg["model_type"])
+    assert validate_config(cfg, schema) == []
+    assert "models" not in cfg and "common" not in cfg
