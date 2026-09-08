@@ -18,6 +18,9 @@ TEMPLATE_FOR_TASK = {
 
 COMMON_DIRNAME = "common"
 COMMON_DIR = TEMPLATES_DIR / COMMON_DIRNAME
+# Scripts copied verbatim into a project via copy_common(). `clean.py` also lives under
+# COMMON_DIR but is never copied as-is: cleaning.render_clean_py() reads it and
+# substitutes the approved steps into its STEPS_JSON line before writing it out.
 COMMON_FILES = ("profile.py",)
 
 
