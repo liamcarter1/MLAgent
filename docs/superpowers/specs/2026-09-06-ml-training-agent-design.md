@@ -91,5 +91,6 @@ pytest with `FakeLLM`; templates trained on tiny synthetic data in tests; `audit
 1. Foundation: scaffold, llm, questions, render, explain, orchestrator, intake, notebook, docs.
 2. Tabular data + cleaning.
 3. Tabular training end-to-end with plots and report.
-4. Tuning loop.
-5. Image tasks + cost gate.
+4. Learning mode and notebook-first pipeline (scripts the user runs, model choice, learning level, captions, form fields). See 2026-09-08-milestone-4-learning-mode-design.md.
+5. Tuning loop.
+6. Image tasks + cost gate.
