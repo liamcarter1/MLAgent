@@ -66,6 +66,33 @@ def test_user_edits_config_values(clean_project):
     assert cfg["epochs"] == 3 and cfg["max_depth"] == 4
 
 
+class RecordingQuestioner(ScriptedQuestioner):
+    """A ScriptedQuestioner that remembers the options offered to one particular question."""
+
+    def __init__(self, answers, watched_question: str):
+        super().__init__(answers)
+        self._watched_question = watched_question
+        self.offered_options: list[str] | None = None
+
+    def choice(self, question, options, allow_other=True, key=None):
+        if question == self._watched_question:
+            self.offered_options = list(options)
+        return super().choice(question, options, allow_other=allow_other, key=key)
+
+
+def test_edit_menu_omits_model_type(clean_project):
+    # model_type is a "choice" rule; ctx.questioner.number() cannot prompt for it (it would
+    # crash on a string default), so the edit menu must never offer it. Task 10 owns the
+    # real model-choice flow.
+    questioner = RecordingQuestioner(["n", "Done"], "Which value do you want to change?")
+    ctx = StageContext(project=clean_project, llm=FakeLLM([]), questioner=questioner,
+                       explainer=None, display=lambda s: None)
+    CodegenStage().prepare(ctx)
+    assert questioner.offered_options is not None
+    assert not any(opt.startswith("model_type") for opt in questioner.offered_options)
+    assert "Done" in questioner.offered_options
+
+
 def test_bad_data_stops_stage_without_writing(clean_project):
     meta = clean_project.read_json("data_meta.json")
     meta["target"] = "nope"

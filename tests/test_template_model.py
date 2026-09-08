@@ -81,20 +81,37 @@ def test_capacity_grows_with_each_epoch(model_module):
                                   [False] * 4)
     gb.fit_epoch(X, y)
     first = gb.estimator.max_iter
+    first_fitted = gb.estimator.n_iter_
     gb.fit_epoch(X, y)
     assert gb.estimator.max_iter == first + CONFIGS["gradient_boosting"]["iters_per_epoch"]
+    # not just the parameter: warm_start must actually have added boosting rounds
+    assert gb.estimator.n_iter_ == first_fitted + CONFIGS["gradient_boosting"]["iters_per_epoch"]
 
     rf = model_module.build_model(CONFIGS["random_forest"], "tabular_classification",
                                   [False] * 4)
     rf.fit_epoch(X, y)
     trees = rf.estimator.n_estimators
+    first_fitted_trees = len(rf.estimator.estimators_)
     rf.fit_epoch(X, y)
     assert rf.estimator.n_estimators == trees + CONFIGS["random_forest"]["trees_per_epoch"]
+    # not just the parameter: warm_start must actually have added fitted trees
+    assert len(rf.estimator.estimators_) == (
+        first_fitted_trees + CONFIGS["random_forest"]["trees_per_epoch"]
+    )
 
     lin = model_module.build_model(CONFIGS["linear"], "tabular_classification", [False] * 4)
     lin.fit_epoch(X, y)
     lin.fit_epoch(X, y)
     assert lin.epochs_fitted == 2  # one partial_fit pass per epoch, no capacity change
+
+
+def test_predict_proba_on_regression_raises(model_module):
+    X, y = regression_data()
+    model = model_module.build_model(CONFIGS["gradient_boosting"], "tabular_regression",
+                                     [False] * 4)
+    model.fit_epoch(X, y)
+    with pytest.raises(ValueError):
+        model.predict_proba(X)
 
 
 def test_categorical_mask_is_passed_to_gradient_boosting(model_module):

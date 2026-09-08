@@ -77,6 +77,8 @@ class EpochModel:
         return self.estimator.predict(self._features(X))
 
     def predict_proba(self, X):
+        if self.task_type != CLASSIFICATION:
+            raise ValueError("predict_proba is only defined for classification")
         return self.estimator.predict_proba(self._features(X))
 
     @property

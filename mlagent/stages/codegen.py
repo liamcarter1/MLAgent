@@ -193,7 +193,12 @@ class CodegenStage:
     def _edit_config(self, ctx: StageContext, config: dict, schema: dict) -> dict:
         config = dict(config)
         while True:
-            options = [f"{k} = {v}" for k, v in config.items()] + ["Done"]
+            # model_type (and any other "choice" rule) is not a number the questioner can
+            # prompt for; Task 10 owns the model-choice flow, so it is left off this menu.
+            editable = [
+                k for k in config if schema.get(k, {}).get("type") != "choice"
+            ]
+            options = [f"{k} = {config[k]}" for k in editable] + ["Done"]
             pick = ctx.questioner.choice(
                 "Which value do you want to change?", options, allow_other=False
             )
