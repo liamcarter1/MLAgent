@@ -8,6 +8,7 @@ from mlagent.ui.questions import ScriptedQuestioner
 
 ANSWERS = [
     "Predict customer churn from account data",  # goal
+    "Intermediate - explain the key ideas",       # learning level
     "Tabular classification",                     # task type label
     "accuracy",                                   # metric
     "0.9",                                        # target
@@ -32,6 +33,7 @@ def test_collect_draft_maps_labels_to_codes():
     assert draft["gpu"] == "none"
     assert draft["target_value"] == 0.9
     assert draft["minutes_per_run"] == 10 and draft["max_rounds"] == 5
+    assert draft["learning_level"] == "intermediate"
 
 
 def test_intake_writes_spec_via_tool(project):
@@ -107,3 +109,27 @@ def test_is_complete_false_for_truncated_spec_json(project):
     ctx, _ = make_ctx(project, FakeLLM([]), [])
     with pytest.warns(UserWarning, match="spec.json"):
         assert IntakeStage().is_complete(ctx) is False
+
+
+def test_intake_asks_the_learning_level_and_stores_it(project):
+    from mlagent.stages.intake import LEVEL_LABELS
+
+    assert LEVEL_LABELS["Beginner - explain everything as we go"] == "beginner"
+    ctx, _shown = make_ctx(
+        project,
+        FakeLLM([]),
+        [
+            "Predict churn",
+            "Beginner - explain everything as we go",
+            "Tabular classification",
+            "accuracy",
+            "0.9",
+            "Synthetic data",
+            "10",
+            "5",
+            "No GPU (CPU only)",
+        ],
+    )
+    IntakeStage().run(ctx)
+    assert project.read_json("spec.json")["learning_level"] == "beginner"
+    assert project.read_json("draft_spec.json")["learning_level"] == "beginner"

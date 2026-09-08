@@ -8,6 +8,8 @@ from typing import Any
 TASK_TYPES = ("tabular_classification", "tabular_regression", "image_classification")
 DATA_SOURCES = ("synthetic", "drive", "huggingface")
 GPU_CHOICES = ("none", "T4", "any")
+LEARNING_LEVELS = ("beginner", "intermediate", "expert")
+DEFAULT_LEARNING_LEVEL = "intermediate"
 METRICS_FOR_TASK: dict[str, list[str]] = {
     "tabular_classification": ["accuracy", "f1"],
     "tabular_regression": ["rmse", "mae", "r2"],
@@ -29,6 +31,7 @@ class Spec:
     minutes_per_run: int
     max_rounds: int
     gpu: str
+    learning_level: str = DEFAULT_LEARNING_LEVEL
     notes: str = ""
 
     def validate(self) -> list[str]:
@@ -48,6 +51,8 @@ class Spec:
             problems.append(f"data_source must be one of {DATA_SOURCES}")
         if self.gpu not in GPU_CHOICES:
             problems.append(f"gpu must be one of {GPU_CHOICES}")
+        if self.learning_level not in LEARNING_LEVELS:
+            problems.append(f"learning_level must be one of {LEARNING_LEVELS}")
         if self.minutes_per_run < 1:
             problems.append("minutes_per_run must be >= 1")
         if self.max_rounds < 1:
@@ -63,7 +68,7 @@ class Spec:
         unknown = set(d) - known
         if unknown:
             raise SpecError(f"unknown spec keys: {sorted(unknown)}")
-        missing = known - set(d) - {"notes"}
+        missing = known - set(d) - {"notes", "learning_level"}
         if missing:
             raise SpecError(f"missing spec keys: {sorted(missing)}")
         return cls(
@@ -75,5 +80,6 @@ class Spec:
             minutes_per_run=int(d["minutes_per_run"]),
             max_rounds=int(d["max_rounds"]),
             gpu=str(d["gpu"]),
+            learning_level=str(d.get("learning_level", DEFAULT_LEARNING_LEVEL)),
             notes=str(d.get("notes", "")),
         )

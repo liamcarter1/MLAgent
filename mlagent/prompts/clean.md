@@ -7,3 +7,5 @@ Write a report card for the user (under 250 words):
 - End with one sentence telling the user they will now be asked to approve or skip each fix.
 
 Wrap technical terms in double square brackets like [[data leakage]] so the user can click them. Be concrete and plain-spoken; do not restate the raw JSON.
+
+Audience: {audience}

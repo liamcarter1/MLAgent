@@ -9,7 +9,7 @@ import pandas as pd
 
 from mlagent import config as cfg
 from mlagent.llm import LLMError, ToolSpec
-from mlagent.prompts_io import load_prompt
+from mlagent.prompts_io import audience, load_prompt
 from mlagent.spec import Spec
 from mlagent.stages.base import StageContext
 from mlagent.stages.data import META_FILE
@@ -173,7 +173,9 @@ class CodegenStage:
         )
         try:
             result = ctx.llm.run(
-                load_prompt("codegen"), [{"role": "user", "content": prompt}], [tool]
+                load_prompt("codegen", audience=audience(spec.learning_level)),
+                [{"role": "user", "content": prompt}],
+                [tool],
             )
         except LLMError as exc:
             return {}, f"Using the template defaults (the assistant was unavailable: {exc})."

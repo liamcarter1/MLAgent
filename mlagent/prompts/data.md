@@ -7,3 +7,5 @@ Write a short narrative (under 150 words) for the user:
 3. One sentence on what happens next: an automatic cleanliness audit that proposes fixes for approval.
 
 Wrap technical terms in double square brackets like [[class imbalance]] so the user can click them for an explanation. Do not repeat the full table; the user already sees it.
+
+Audience: {audience}

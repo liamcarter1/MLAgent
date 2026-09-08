@@ -12,7 +12,7 @@ from mlagent.audit import Issue, audit_tabular
 from mlagent.cleaning import apply_steps, describe_step, render_clean_py
 from mlagent.llm import LLMError, ask_text
 from mlagent.profile import profile_dataframe
-from mlagent.prompts_io import load_prompt
+from mlagent.prompts_io import audience, load_prompt
 from mlagent.stages.base import StageContext
 from mlagent.stages.data import META_FILE, RAW_FILE
 
@@ -202,7 +202,11 @@ class CleanStage:
             default=str,
         )
         try:
-            text = ask_text(ctx.llm, load_prompt("clean"), payload)
+            text = ask_text(
+                ctx.llm,
+                load_prompt("clean", audience=audience(ctx.spec().learning_level)),
+                payload,
+            )
         except LLMError as exc:
             text = f"(Couldn't reach Claude for the report card: {exc}) Here are the issues found:"
         ctx.display(text)

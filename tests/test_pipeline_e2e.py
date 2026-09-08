@@ -20,6 +20,7 @@ from mlagent.ui.questions import ScriptedQuestioner
 # codegen, train and report ask only confirm() questions, which AutoApproveQuestioner answers.
 ANSWERS = [
     "Predict churn from account data",  # intake: goal
+    "Intermediate - explain the key ideas",  # intake: learning level
     "Tabular classification",           # intake: task type label
     "accuracy",                         # intake: metric
     "0.9",                              # intake: target value

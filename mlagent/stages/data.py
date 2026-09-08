@@ -13,7 +13,7 @@ from mlagent.datasources.drive import list_candidates, load_table
 from mlagent.datasources.hf import load_tabular, search_datasets
 from mlagent.llm import LLMError, ask_text
 from mlagent.profile import profile_dataframe, profile_markdown
-from mlagent.prompts_io import load_prompt
+from mlagent.prompts_io import audience, load_prompt
 from mlagent.stages.base import StageContext
 from mlagent.synth.tabular import TARGET, SynthTabularConfig, generate
 
@@ -167,7 +167,11 @@ class DataStage:
             + "\n\nData profile:\n" + json.dumps(profile, indent=2)
         )
         try:
-            text = ask_text(ctx.llm, load_prompt("data"), prompt)
+            text = ask_text(
+                ctx.llm,
+                load_prompt("data", audience=audience(ctx.spec().learning_level)),
+                prompt,
+            )
         except LLMError as exc:
             text = (
                 f"(Couldn't reach Claude for a narrative: {exc}) "

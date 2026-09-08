@@ -11,7 +11,7 @@ from pathlib import Path
 from mlagent import config as cfg
 from mlagent.llm import LLMError, ask_text
 from mlagent.plots import present_evaluation
-from mlagent.prompts_io import load_prompt
+from mlagent.prompts_io import audience, load_prompt
 from mlagent.runlog import best_run, read_runs, summarise
 from mlagent.runner import RunResult, run_script
 from mlagent.stages.base import StageContext
@@ -210,7 +210,11 @@ class ReportStage:
                      "loss": eval_test.get("loss")},
         }
         try:
-            return ask_text(ctx.llm, load_prompt("report"), json.dumps(summary, default=str))
+            return ask_text(
+                ctx.llm,
+                load_prompt("report", audience=audience(spec.learning_level)),
+                json.dumps(summary, default=str),
+            )
         except LLMError:
             return (
                 f"Best validation {spec.metric} was {_fmt(best.get('best_val_metric'))}; "

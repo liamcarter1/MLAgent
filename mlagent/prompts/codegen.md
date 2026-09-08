@@ -7,3 +7,5 @@ Call the `propose_config` tool exactly once with:
 - `rationale`: under 120 words, plain-spoken, for someone learning ML. Say what you changed from the defaults and why, or say you kept the defaults and why they fit.
 
 Wrap technical terms in double square brackets like [[learning rate]] or [[overfitting]] so the user can click them. Do not write code and do not restate the raw JSON.
+
+Audience: {audience}

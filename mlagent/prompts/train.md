@@ -8,3 +8,5 @@ Write a short debrief for a learner (under 180 words):
 - End with one plain suggestion for the next run; the tuning stage will handle the details.
 
 Wrap technical terms in double square brackets like [[validation loss]] so the user can click them. Use the numbers given; do not invent any. Do not restate the raw JSON.
+
+Audience: {audience}

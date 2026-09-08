@@ -7,3 +7,5 @@ Rules:
 - Then call `write_spec` exactly once with the final values. Keep the user's wording for `goal`. Put anything useful you learned into `notes` (for example the positive class, units of the target, or constraints).
 - If `write_spec` returns an error, fix the values and call it again.
 - Finish with a short message (under 120 words) that summarises the spec in plain language and says what happens next: obtaining the data. Wrap technical terms in double square brackets like [[validation set]] so the user can click them for an explanation.
+
+Audience: {audience}

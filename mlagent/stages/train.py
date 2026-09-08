@@ -15,7 +15,7 @@ from matplotlib.figure import Figure
 from mlagent import config as cfg
 from mlagent.llm import LLMError, ask_text
 from mlagent.plots import present, present_evaluation, training_curves
-from mlagent.prompts_io import load_prompt
+from mlagent.prompts_io import audience, load_prompt
 from mlagent.runlog import append_run, read_runs
 from mlagent.runner import RunResult, run_training
 from mlagent.stages.base import StageContext
@@ -196,7 +196,11 @@ class TrainStage:
             f"(target {spec.target_value:g})."
         )
         try:
-            narrative = ask_text(ctx.llm, load_prompt("train"), json.dumps(summary, default=str))
+            narrative = ask_text(
+                ctx.llm,
+                load_prompt("train", audience=audience(spec.learning_level)),
+                json.dumps(summary, default=str),
+            )
         except LLMError:
             narrative = "Look at the [[loss]] curves: if validation loss rises while training " \
                         "loss keeps falling, the model is [[overfitting]]."
