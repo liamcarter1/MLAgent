@@ -24,23 +24,23 @@ from pathlib import Path
 import joblib
 import matplotlib.pyplot as plt
 from data import load_data
-from evaluate import evaluate_split
+from evaluate import (
+    HIGHER_IS_BETTER,
+    INK_2,
+    MUTED,
+    SERIES,
+    SURFACE,
+    evaluate_split,
+    frame,
+    metric_for,
+)
 from model import build_model
 
 # --- settings ---
 CONFIG_FILE = "config.json"
-SPEC_FILE = "spec.json"
 METRICS_FILE = "metrics.json"
 CHECKPOINT = Path("checkpoints") / "best.joblib"
 CURVES_FIGURE = Path("plots") / "training_curves.png"
-HIGHER_IS_BETTER = {"accuracy": True, "f1": True, "r2": True, "rmse": False, "mae": False}
-DEFAULT_METRIC = {"tabular_classification": "accuracy", "tabular_regression": "rmse"}
-
-# --- palette ---
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
-INK, INK_2, MUTED, GRID, AXIS, SURFACE = (
-    "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb",
-)
 
 
 # --- small helpers ---
@@ -67,11 +67,6 @@ def write_json(path: Path, obj) -> None:
                 Path(tmp).unlink(missing_ok=True)
                 raise
             time.sleep(0.05)
-
-
-def metric_for(project_dir: Path, task_type: str) -> str:
-    spec = read_json(project_dir / SPEC_FILE, default={}) or {}
-    return str(spec.get("metric") or DEFAULT_METRIC[task_type])
 
 
 def empty_metrics() -> dict:
@@ -113,15 +108,7 @@ def training_curves(epochs: list[dict], metric: str):
         for key, colour, label in zip(keys, SERIES[:2], ("train", "validation"), strict=True):
             ax.plot(xs, [e.get(key) for e in epochs], color=colour, linewidth=2,
                     marker="o", markersize=4, label=label)
-        ax.set_facecolor(SURFACE)
-        ax.set_title(title, color=INK, fontsize=10, loc="left")
-        ax.tick_params(colors=INK_2, labelsize=8)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(AXIS)
-        ax.grid(True, color=GRID, linewidth=0.6)
-        ax.set_axisbelow(True)
+        frame(ax, title)
         ax.set_xlabel("epoch", color=INK_2, fontsize=8)
         ax.legend(frameon=False, fontsize=8, labelcolor=INK_2)
     if not epochs:

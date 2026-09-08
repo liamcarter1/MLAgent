@@ -97,7 +97,8 @@ def test_dry_run_works_for_every_family(clean_project, model_type):
     proc = run(root, "--dry-run")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     line = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert line["seconds_per_epoch"] > 0
+    # rounded to 4 dp: a sub-100 microsecond epoch can legitimately round to 0.0
+    assert line["seconds_per_epoch"] >= 0
     assert line["n_train"] > 0
     assert not (root / "metrics.json").exists()
 
