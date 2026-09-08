@@ -1,12 +1,22 @@
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from mlagent.audit import audit_tabular
 from mlagent.llm import FakeLLM
-from mlagent.stages.base import StageContext
-from mlagent.stages.clean import AUDIT_FILE, CLEAN_FILE, CLEAN_PY, PROFILE_CLEAN_FILE, CleanStage
+from mlagent.stages.base import Handoff, StageContext
+from mlagent.stages.clean import (
+    AUDIT_FILE,
+    CLEAN_FILE,
+    CLEAN_PY,
+    PROFILE_CLEAN_FILE,
+    SPLIT_SEED,
+    CleanStage,
+)
 from mlagent.stages.data import META_FILE, RAW_FILE
 from mlagent.ui.questions import ScriptedQuestioner
 
@@ -33,86 +43,32 @@ def messy_df() -> pd.DataFrame:
     return pd.concat([df, df.iloc[:5]], ignore_index=True)
 
 
-def prepare(project, df):
-    project.write_json("spec.json", SPEC)
+def prepare(project, df, task_type="tabular_classification"):
+    project.write_json("spec.json", {**SPEC, "task_type": task_type})
     project.data_raw.mkdir(parents=True, exist_ok=True)
     df.to_csv(project.data_raw / RAW_FILE, index=False)
-    project.write_json(META_FILE, {"source": "synthetic", "target": "target"})
+    project.write_json(META_FILE, {"source": "synthetic", "target": "target",
+                                   "task_type": task_type,
+                                   "raw_path": "data/raw/data.csv"})
 
 
 def make_ctx(project, answers, llm=None):
     shown: list[str] = []
+    figures: list[tuple[Path, str]] = []
     ctx = StageContext(
         project=project, llm=llm or FakeLLM([[("text", "Report card [[missing values]]")]]),
         questioner=ScriptedQuestioner(answers), explainer=None, display=shown.append,
+        display_figure=lambda path, caption="": figures.append((path, caption)),
     )
-    return ctx, shown
+    return ctx, shown, figures
 
 
-def test_approved_fixes_are_applied_and_recorded(project):
-    df = messy_df()
-    prepare(project, df)
-    n_fixable = sum(1 for i in audit_tabular(df, "target") if i.fix)
-    assert n_fixable >= 4
-    ctx, shown = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
-    stage = CleanStage()
-    assert not stage.is_complete(ctx)
-    stage.run(ctx)
-    assert stage.is_complete(ctx)
-    cleaned = pd.read_csv(project.data_clean / CLEAN_FILE)
-    assert "row_id" not in cleaned.columns and "const" not in cleaned.columns
-    assert cleaned.duplicated().sum() == 0 and cleaned["f1"].isna().sum() == 0
-    assert set(cleaned["cat"].unique()) == {"a", "b", "c"}
-    audit = project.read_json(AUDIT_FILE)
-    assert len(audit["decisions"]) == len(audit["issues"]) and len(audit["steps"]) == n_fixable
-    assert all(d["approved"] for d in audit["decisions"] if d["fix"])
-    meta = project.read_json(META_FILE)
-    assert (
-        meta["splits"] == {"train": 0.7, "val": 0.15, "test": 0.15}
-        and meta["dropped_columns"] == []
+def run_clean_script(project):
+    result = subprocess.run(
+        [sys.executable, "clean.py"], cwd=str(project.root),
+        capture_output=True, text=True, encoding="utf-8",
     )
-    assert project.read_json(PROFILE_CLEAN_FILE)["n_rows"] == len(cleaned)
-    assert meta["clean_n_rows"] == len(cleaned) and meta["clean_n_cols"] == cleaned.shape[1]
-    assert meta["clean_path"] == "data/clean/data.csv"
-    assert meta["feature_columns"] == [c for c in cleaned.columns if c != "target"]
-    assert meta["categorical_columns"] == ["cat"]
-    assert meta["n_classes"] == 2 and meta["class_labels"] == ["0", "1"]
-    assert (project.plots_dir / "clean_before_after_missing.png").exists()
-    assert any("[[missing values]]" in s for s in shown)
-    assert any("Cleaning summary" in s for s in shown)
-    namespace: dict = {}
-    code = compile((project.root / CLEAN_PY).read_text(encoding="utf-8"), "clean.py", "exec")
-    exec(code, namespace)
-    pd.testing.assert_frame_equal(
-        namespace["clean"](df).reset_index(drop=True), cleaned, check_dtype=False
-    )
-
-
-def test_skipped_fixes_and_manual_drops(project):
-    df = messy_df()
-    prepare(project, df)
-    n_fixable = sum(1 for i in audit_tabular(df, "target") if i.fix)
-    ctx, _ = make_ctx(project, ["n"] * n_fixable + ["f2, nope", "0.8", "0.1"])
-    CleanStage().run(ctx)
-    cleaned = pd.read_csv(project.data_clean / CLEAN_FILE)
-    assert "row_id" in cleaned.columns and "f2" not in cleaned.columns
-    audit = project.read_json(AUDIT_FILE)
-    assert audit["steps"] == [{"op": "drop_columns", "params": {"columns": ["f2"]}}]
-    assert project.read_json(META_FILE)["dropped_columns"] == ["f2"]
-
-
-def test_clean_data_has_no_issues_and_splits_are_adjusted(project):
-    rng = np.random.default_rng(3)
-    df = pd.DataFrame({
-        "a": rng.normal(size=100), "b": rng.normal(size=100), "target": rng.integers(0, 2, 100),
-    })
-    prepare(project, df)
-    ctx, shown = make_ctx(project, ["", "0.9", "0.3"])
-    CleanStage().run(ctx)
-    assert any("no problems" in s for s in shown)
-    splits = project.read_json(META_FILE)["splits"]
-    assert splits["test"] >= 0.05 and abs(sum(splits.values()) - 1.0) < 1e-6
-    assert json.loads((project.root / AUDIT_FILE).read_text(encoding="utf-8"))["issues"] == []
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def user_id_collision_df() -> pd.DataFrame:
@@ -130,6 +86,84 @@ def user_id_collision_df() -> pd.DataFrame:
     })
 
 
+def test_approved_fixes_are_written_to_clean_py_and_debriefed(project):
+    df = messy_df()
+    prepare(project, df)
+    n_fixable = sum(1 for i in audit_tabular(df, "target") if i.fix)
+    assert n_fixable >= 4
+    ctx, shown, figures = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
+    stage = CleanStage()
+    assert not stage.is_complete(ctx)
+
+    handoff = stage.prepare(ctx)
+    assert handoff == Handoff(
+        stage="clean", commands=[["clean.py"]],
+        outputs=["data/clean/data.csv", "profile_clean.json"],
+    )
+    audit = project.read_json(AUDIT_FILE)
+    assert len(audit["decisions"]) == len(audit["issues"]) and len(audit["steps"]) == n_fixable
+    assert all(d["approved"] for d in audit["decisions"] if d["fix"])
+    meta = project.read_json(META_FILE)
+    assert meta["splits"] == {"train": 0.7, "val": 0.15, "test": 0.15}
+    assert meta["dropped_columns"] == [] and meta["split_seed"] == SPLIT_SEED
+    assert "feature_columns" not in meta  # only known after clean.py has run
+    assert (project.root / CLEAN_PY).exists()
+    assert not stage.is_complete(ctx)
+
+    run_clean_script(project)
+    assert stage.outputs_ready(ctx, handoff)
+    stage.debrief(ctx)
+    assert stage.is_complete(ctx)
+
+    cleaned = pd.read_csv(project.data_clean / CLEAN_FILE)
+    assert "row_id" not in cleaned.columns and "const" not in cleaned.columns
+    assert cleaned.duplicated().sum() == 0 and cleaned["f1"].isna().sum() == 0
+    assert set(cleaned["cat"].unique()) == {"a", "b", "c"}
+    meta = project.read_json(META_FILE)
+    assert meta["clean_path"] == "data/clean/data.csv"
+    assert meta["clean_n_rows"] == len(cleaned) and meta["clean_n_cols"] == cleaned.shape[1]
+    assert meta["feature_columns"] == [c for c in cleaned.columns if c != "target"]
+    assert meta["categorical_columns"] == ["cat"]
+    assert meta["n_classes"] == 2 and meta["class_labels"] == ["0", "1"]
+    assert project.read_json(PROFILE_CLEAN_FILE)["after"]["n_rows"] == len(cleaned)
+    assert [Path(p).name for p, _c in figures] == ["clean_before_after_missing.png"]
+    assert "missing" in figures[0][1]
+    assert any("[[missing values]]" in s for s in shown)
+    assert any("Cleaning summary" in s for s in shown)
+
+    namespace: dict = {}
+    code = compile((project.root / CLEAN_PY).read_text(encoding="utf-8"), "clean.py", "exec")
+    exec(code, namespace)
+    pd.testing.assert_frame_equal(
+        namespace["clean"](df).reset_index(drop=True), cleaned, check_dtype=False
+    )
+
+
+def test_skipped_fixes_and_manual_drops(project):
+    df = messy_df()
+    prepare(project, df)
+    n_fixable = sum(1 for i in audit_tabular(df, "target") if i.fix)
+    ctx, _shown, _figures = make_ctx(project, ["n"] * n_fixable + ["f2, nope", "0.8", "0.1"])
+    CleanStage().prepare(ctx)
+    audit = project.read_json(AUDIT_FILE)
+    assert audit["steps"] == [{"op": "drop_columns", "params": {"columns": ["f2"]}}]
+    assert project.read_json(META_FILE)["dropped_columns"] == ["f2"]
+
+
+def test_clean_data_has_no_issues_and_splits_are_adjusted(project):
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame({
+        "a": rng.normal(size=100), "b": rng.normal(size=100), "target": rng.integers(0, 2, 100),
+    })
+    prepare(project, df)
+    ctx, shown, _figures = make_ctx(project, ["", "0.9", "0.3"])
+    CleanStage().prepare(ctx)
+    assert any("no problems" in s for s in shown)
+    splits = project.read_json(META_FILE)["splits"]
+    assert splits["test"] >= 0.05 and abs(sum(splits.values()) - 1.0) < 1e-6
+    assert json.loads((project.root / AUDIT_FILE).read_text(encoding="utf-8"))["issues"] == []
+
+
 def test_approved_drop_and_percolumn_fix_on_same_column_does_not_crash(project):
     df = user_id_collision_df()
     prepare(project, df)
@@ -137,8 +171,9 @@ def test_approved_drop_and_percolumn_fix_on_same_column_does_not_crash(project):
     by_kind = {i.kind: i for i in issues if i.column == "user_id"}
     assert "id_column" in by_kind and "inconsistent_categories" in by_kind
     n_fixable = sum(1 for i in issues if i.fix)
-    ctx, _ = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
-    CleanStage().run(ctx)  # must not raise
+    ctx, _shown, _figures = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
+    CleanStage().prepare(ctx)  # must not raise
+    run_clean_script(project)
     cleaned = pd.read_csv(project.data_clean / CLEAN_FILE)
     assert "user_id" not in cleaned.columns
     audit = project.read_json(AUDIT_FILE)
@@ -163,8 +198,9 @@ def test_target_becomes_float_via_nan_drop_is_saved_as_int(project):
     prepare(project, df)
     issues = audit_tabular(df, "target")
     n_fixable = sum(1 for i in issues if i.fix)
-    ctx, _ = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
-    CleanStage().run(ctx)
+    ctx, _shown, _figures = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"])
+    CleanStage().prepare(ctx)
+    run_clean_script(project)
     cleaned = pd.read_csv(project.data_clean / CLEAN_FILE)
     assert cleaned["target"].isna().sum() == 0
     assert pd.api.types.is_integer_dtype(cleaned["target"].dtype)
@@ -174,7 +210,20 @@ def test_llm_failure_does_not_block_cleaning(project):
     df = messy_df()
     prepare(project, df)
     n_fixable = sum(1 for i in audit_tabular(df, "target") if i.fix)
-    ctx, shown = make_ctx(project, ["y"] * n_fixable + ["", "0.7", "0.15"], llm=FakeLLM([]))
-    CleanStage().run(ctx)
+    ctx, shown, _figures = make_ctx(
+        project, ["y"] * n_fixable + ["", "0.7", "0.15"], llm=FakeLLM([])
+    )
+    CleanStage().prepare(ctx)
     assert any("Couldn't reach Claude" in s for s in shown)
-    assert (project.data_clean / CLEAN_FILE).exists()
+    assert (project.root / CLEAN_PY).exists()
+
+
+def test_debrief_without_the_clean_csv_says_so(project):
+    prepare(project, messy_df())
+    n_fixable = sum(1 for i in audit_tabular(messy_df(), "target") if i.fix)
+    ctx, shown, _figures = make_ctx(project, ["n"] * n_fixable + ["", "0.7", "0.15"])
+    stage = CleanStage()
+    stage.prepare(ctx)
+    stage.debrief(ctx)
+    assert not stage.is_complete(ctx)
+    assert any("clean.py" in s for s in shown)
