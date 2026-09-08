@@ -26,7 +26,7 @@ def test_llm_proposal_is_coerced_and_written(clean_project):
     ctx, shown = make_ctx(clean_project, llm, ["y"])  # confirm: happy with config
     stage = CodegenStage()
     assert not stage.is_complete(ctx)
-    stage.run(ctx)
+    stage.prepare(ctx)
     assert stage.is_complete(ctx)
     for name in CODE_FILES:
         assert (clean_project.root / name).exists()
@@ -45,7 +45,7 @@ def test_llm_proposal_is_coerced_and_written(clean_project):
 
 def test_llm_failure_falls_back_to_defaults(clean_project):
     ctx, shown = make_ctx(clean_project, FakeLLM([]), ["y"])
-    CodegenStage().run(ctx)
+    CodegenStage().prepare(ctx)
     cfg = clean_project.read_json("config.json")
     assert cfg["learning_rate"] == 0.1 and cfg["epochs"] == 10
     assert any("defaults" in s for s in shown)
@@ -61,7 +61,7 @@ def test_user_edits_config_values(clean_project):
         "Done",
     ]
     ctx, _ = make_ctx(clean_project, FakeLLM([]), answers)
-    CodegenStage().run(ctx)
+    CodegenStage().prepare(ctx)
     cfg = clean_project.read_json("config.json")
     assert cfg["epochs"] == 3 and cfg["max_depth"] == 4
 
@@ -72,7 +72,7 @@ def test_bad_data_stops_stage_without_writing(clean_project):
     clean_project.write_json("data_meta.json", meta)
     ctx, shown = make_ctx(clean_project, FakeLLM([]), [])
     stage = CodegenStage()
-    stage.run(ctx)
+    stage.prepare(ctx)
     assert not stage.is_complete(ctx)
     assert not (clean_project.root / "config.json").exists()
     assert any("nope" in s for s in shown)
@@ -84,7 +84,7 @@ def test_unsupported_task_type_is_reported(clean_project):
     clean_project.write_json("spec.json", spec)
     ctx, shown = make_ctx(clean_project, FakeLLM([]), [])
     stage = CodegenStage()
-    stage.run(ctx)
+    stage.prepare(ctx)
     assert not stage.is_complete(ctx)
     assert any("image_classification" in s for s in shown)
 
@@ -104,7 +104,7 @@ def test_check_data_and_config_table(clean_project):
 def test_is_complete_requires_valid_config(clean_project):
     ctx, _ = make_ctx(clean_project, FakeLLM([]), ["y"])
     stage = CodegenStage()
-    stage.run(ctx)
+    stage.prepare(ctx)
     cfg = clean_project.read_json("config.json")
     cfg["learning_rate"] = 99
     clean_project.write_json("config.json", cfg)

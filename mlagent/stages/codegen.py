@@ -111,7 +111,7 @@ class CodegenStage:
             return False
         return validate_config(config, schema) == []
 
-    def run(self, ctx: StageContext) -> None:
+    def prepare(self, ctx: StageContext) -> None:
         spec = ctx.spec()
         template = TEMPLATE_FOR_TASK.get(spec.task_type)
         if template is None:
@@ -151,6 +151,10 @@ class CodegenStage:
             config = self._edit_config(ctx, config, schema)
             ctx.project.write_json(cfg.CONFIG_FILE, config)
             ctx.display("Updated configuration:\n\n" + config_table(config, schema))
+
+    def debrief(self, ctx: StageContext) -> None:
+        """Codegen needs no cells from the user; everything happened in prepare."""
+        return None
 
     def _propose(self, ctx: StageContext, spec: Spec, meta: dict, schema: dict) -> tuple[dict, str]:
         captured: dict = {}

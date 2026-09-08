@@ -2,12 +2,14 @@ import pytest
 
 from mlagent.llm import FakeLLM
 from mlagent.orchestrator import Orchestrator
-from mlagent.stages.base import StageContext
+from mlagent.stages.base import Handoff, StageContext, outputs_ready, waiting_message
 from mlagent.ui.explain import Explainer, Glossary
 from mlagent.ui.questions import ScriptedQuestioner
 
 
 class RecordingStage:
+    """A legacy single-phase stage: only `run` and `is_complete`."""
+
     def __init__(self, name: str, fail: bool = False, write: bool = True):
         self.name = name
         self.fail = fail
@@ -23,6 +25,33 @@ class RecordingStage:
 
     def is_complete(self, ctx: StageContext) -> bool:
         return ctx.project.exists(f"{self.name}.json")
+
+
+class ScriptStage:
+    """A two-phase stage: prepare writes a script, the 'user' runs it, debrief reads it."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.prepared = 0
+        self.debriefed = 0
+
+    def prepare(self, ctx: StageContext) -> Handoff:
+        self.prepared += 1
+        (ctx.project.root / f"{self.name}.py").write_text("print('hi')\n", encoding="utf-8")
+        return Handoff(stage=self.name, commands=[[f"{self.name}.py"]],
+                       outputs=[f"{self.name}_out.json"])
+
+    def debrief(self, ctx: StageContext) -> None:
+        self.debriefed += 1
+        ctx.project.write_json(f"{self.name}.json", {"ok": True})
+
+    def is_complete(self, ctx: StageContext) -> bool:
+        return ctx.project.exists(f"{self.name}.json")
+
+
+def user_runs(project, stage_name: str) -> None:
+    """Stand in for the user running the handoff cell."""
+    project.write_json(f"{stage_name}_out.json", {"done": True})
 
 
 class ContextRecordingStage:
@@ -147,3 +176,125 @@ def test_ctx_spec_reads_spec_or_raises(project):
     })
     assert isinstance(ctx.spec(), Spec)
     assert ctx.spec().metric == "accuracy"
+
+
+def test_handoff_round_trips_through_state_json():
+    h = Handoff(stage="train", commands=[["train.py"], ["evaluate.py"]],
+                outputs=["metrics.json"])
+    assert Handoff.from_dict(h.to_dict()) == h
+    assert Handoff.from_dict(None) is None
+    assert Handoff.from_dict({"stage": "x"}) == Handoff(stage="x", commands=[], outputs=[])
+
+
+def test_outputs_ready_checks_existence_and_freshness(tmp_path):
+    import os
+    import time
+
+    script = tmp_path / "s.py"
+    script.write_text("x = 1\n", encoding="utf-8")
+    h = Handoff(stage="s", commands=[["s.py"]], outputs=["out.json"])
+    assert outputs_ready(tmp_path, h) is False
+    out = tmp_path / "out.json"
+    out.write_text("{}", encoding="utf-8")
+    assert outputs_ready(tmp_path, h) is True
+    # Editing the script after the output was produced makes the output stale.
+    future = time.time() + 60
+    os.utime(script, (future, future))
+    assert outputs_ready(tmp_path, h) is False
+
+
+def test_waiting_message_names_every_cell():
+    h = Handoff(stage="train", commands=[["train.py"], ["evaluate.py", "--split", "val"]],
+                outputs=[])
+    text = waiting_message(h)
+    assert "`train.py`" in text and "`evaluate.py --split val`" in text
+    assert "run this cell again" in text
+
+
+def test_script_stage_pauses_until_outputs_exist(project):
+    stage = ScriptStage("s")
+    shown: list[str] = []
+    orch = Orchestrator(make_ctx(project, display=shown.append), [stage])
+    assert orch.run() == []
+    assert stage.prepared == 1 and stage.debriefed == 0
+    assert orch.waiting() == Handoff(stage="s", commands=[["s.py"]], outputs=["s_out.json"])
+    assert any("run this cell again" in s for s in shown)
+    state = project.read_json("state.json")
+    assert state["prepared"] == ["s"] and state["handoff"]["stage"] == "s"
+
+    # Running again without the outputs does not re-prepare.
+    assert orch.run() == []
+    assert stage.prepared == 1
+
+    user_runs(project, "s")
+    assert orch.run() == ["s"]
+    assert stage.prepared == 1 and stage.debriefed == 1
+    state = project.read_json("state.json")
+    assert state["completed"] == ["s"] and state["handoff"] is None and state["prepared"] == []
+
+
+def test_prepared_survives_a_fresh_orchestrator(project):
+    first = ScriptStage("s")
+    Orchestrator(make_ctx(project), [first]).run()
+    user_runs(project, "s")
+    second = ScriptStage("s")
+    assert Orchestrator(make_ctx(project), [second]).run() == ["s"]
+    assert second.prepared == 0 and second.debriefed == 1
+
+
+def test_debrief_by_name_forces_a_stage_whose_mtimes_lie(project):
+    stage = ScriptStage("s")
+    orch = Orchestrator(make_ctx(project), [stage])
+    orch.run()
+    orch.debrief("s")  # outputs missing, but the user says they ran it
+    assert stage.debriefed == 1
+    assert orch.completed() == ["s"]
+    with pytest.raises(ValueError):
+        orch.debrief("nope")
+
+
+def test_reset_forgets_prepared_and_handoff(project):
+    a, b = ScriptStage("a"), ScriptStage("b")
+    orch = Orchestrator(make_ctx(project), [a, b])
+    orch.run()
+    user_runs(project, "a")
+    orch.run()
+    assert orch.completed() == ["a"]
+    orch.reset("a")
+    state = project.read_json("state.json")
+    assert state["prepared"] == [] and state["handoff"] is None
+    assert state["forced"] == ["a", "b"]
+
+
+def test_answers_wrap_the_questioner_for_one_call_only(project):
+    class AskingStage:
+        name = "ask"
+
+        def __init__(self):
+            self.seen: list[str] = []
+
+        def prepare(self, ctx):
+            self.seen.append(ctx.questioner.text("Goal?", key="intake.goal"))
+            ctx.project.write_json("ask.json", {"ok": True})
+            return None
+
+        def debrief(self, ctx):
+            return None
+
+        def is_complete(self, ctx):
+            return ctx.project.exists("ask.json")
+
+    stage = AskingStage()
+    ctx = make_ctx(project)
+    ctx.questioner = ScriptedQuestioner(["typed"])
+    orch = Orchestrator(ctx, [stage])
+    assert orch.run(answers={"intake.goal": "from the form"}) == ["ask"]
+    assert stage.seen == ["from the form"]
+    assert isinstance(orch.ctx.questioner, ScriptedQuestioner)
+
+
+def test_legacy_single_phase_stages_still_run(project):
+    a, b = RecordingStage("a"), RecordingStage("b")
+    orch = Orchestrator(make_ctx(project), [a, b])
+    assert orch.run() == ["a", "b"]
+    assert orch.waiting() is None

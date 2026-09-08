@@ -13,7 +13,7 @@ def prepared(project):
     """Run codegen with defaults so the training project exists."""
     ctx = StageContext(project=project, llm=FakeLLM([]), questioner=ScriptedQuestioner(["y"]),
                        explainer=None, display=lambda s: None)
-    CodegenStage().run(ctx)
+    CodegenStage().prepare(ctx)
     cfg = project.read_json("config.json")
     cfg.update({"epochs": 3, "iters_per_epoch": 3, "early_stopping_patience": 0})
     project.write_json("config.json", cfg)

@@ -129,7 +129,7 @@ class IntakeStage:
         except (SpecError, TypeError, ValueError):
             return False
 
-    def run(self, ctx: StageContext) -> None:
+    def prepare(self, ctx: StageContext) -> None:
         draft = collect_draft(ctx.questioner)
         ctx.project.write_json("draft_spec.json", draft)
         written: dict = {}
@@ -200,3 +200,7 @@ class IntakeStage:
                 ctx.display(result.text)
             else:
                 ctx.display("Spec saved. Next: obtaining the [[training data]].")
+
+    def debrief(self, ctx: StageContext) -> None:
+        """Intake needs no cells from the user; everything happened in prepare."""
+        return None

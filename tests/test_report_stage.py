@@ -14,7 +14,7 @@ from mlagent.ui.questions import ScriptedQuestioner
 def trained(project):
     ctx = StageContext(project=project, llm=FakeLLM([]), questioner=ScriptedQuestioner(["y"]),
                        explainer=None, display=lambda s: None)
-    CodegenStage().run(ctx)
+    CodegenStage().prepare(ctx)
     cfg = project.read_json("config.json")
     cfg.update({"epochs": 2, "iters_per_epoch": 3, "early_stopping_patience": 0})
     project.write_json("config.json", cfg)
