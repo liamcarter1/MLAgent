@@ -54,8 +54,9 @@ def test_synthetic_classification_prepares_then_debriefs(project):
     assert len(df) > 300 and "row_id" in df.columns and "target" in df.columns
     meta = project.read_json(META_FILE)
     assert meta["source"] == "synthetic" and meta["target"] == "target"
-    assert meta["synth_config"]["n_samples"] == 300
+    assert meta["synth_config"]["n_samples"] == 300 and meta["synth_config"]["class_balance"] == 0.6
     assert meta["raw_n_rows"] == len(df) and meta["raw_n_cols"] == df.shape[1]
+    assert meta["task_type"] == "tabular_classification"
     assert meta["raw_path"] == "data/raw/data.csv"
     assert not stage.is_complete(ctx)  # the profile has not been produced yet
     assert not stage.outputs_ready(ctx, handoff)

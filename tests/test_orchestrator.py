@@ -233,6 +233,48 @@ def test_script_stage_pauses_until_outputs_exist(project):
     assert state["completed"] == ["s"] and state["handoff"] is None and state["prepared"] == []
 
 
+class ScriptStageCompleteFromOutput:
+    """A two-phase stage whose completion artifact IS its handoff output — the shape every
+    real two-phase stage has (e.g. `data`'s `is_complete` checks `profile_raw.json`, which
+    is also `profile.py`'s handoff output). `ScriptStage` above is structurally blind to a
+    regression here because its `is_complete` checks `s.json`, which only `debrief()`
+    writes, so the handoff output appearing can never make it complete on its own.
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+        self.prepared = 0
+        self.debriefed = 0
+
+    def prepare(self, ctx: StageContext) -> Handoff:
+        self.prepared += 1
+        (ctx.project.root / f"{self.name}.py").write_text("print('hi')\n", encoding="utf-8")
+        return Handoff(stage=self.name, commands=[[f"{self.name}.py"]],
+                       outputs=[f"{self.name}_out.json"])
+
+    def debrief(self, ctx: StageContext) -> None:
+        self.debriefed += 1
+
+    def is_complete(self, ctx: StageContext) -> bool:
+        return ctx.project.exists(f"{self.name}_out.json")
+
+
+def test_debrief_still_runs_when_the_output_alone_satisfies_is_complete(project):
+    """Regression test for the resume shortcut in `_run`: once the user has run the
+    handoff's script and its output file exists, `is_complete()` becomes true before
+    `debrief()` has ever run. The shortcut must not treat that as "already complete from
+    an earlier session" and skip debrief."""
+    stage = ScriptStageCompleteFromOutput("s")
+    orch = Orchestrator(make_ctx(project), [stage])
+    assert orch.run() == []
+    assert stage.prepared == 1 and stage.debriefed == 0
+
+    user_runs(project, "s")
+    ran = orch.run()
+    assert stage.debriefed == 1
+    assert ran == ["s"]
+
+
 def test_prepared_survives_a_fresh_orchestrator(project):
     first = ScriptStage("s")
     Orchestrator(make_ctx(project), [first]).run()
