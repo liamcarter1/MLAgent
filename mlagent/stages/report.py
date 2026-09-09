@@ -60,6 +60,11 @@ def render_report(project_name: str, spec: dict, runs: list[dict], best: dict | 
         "",
         f"Test {eval_test.get('metric', metric)}: **{_fmt(eval_test.get('value'))}** "
         f"(loss {_fmt(eval_test.get('loss'))}). Evaluated once on the test split.",
+    ]
+    checkpoint = eval_test.get("checkpoint")
+    if checkpoint:
+        lines.append(f"Checkpoint evaluated: `{checkpoint}`.")
+    lines += [
         "",
         "## What we learned",
         "",
@@ -78,11 +83,12 @@ def render_report(project_name: str, spec: dict, runs: list[dict], best: dict | 
 def _load_runs_and_best(project, spec) -> tuple[list[dict], dict | None]:
     """The one place that decides "the best run": shared by `is_complete`, prepare and debrief.
 
-    `evaluate.py`'s own `best_checkpoint()` only considers done runs with a checkpoint, so
-    the candidate set here is narrowed the same way; otherwise a done run whose checkpoint
-    went missing at archive time would be "best" here but never actually evaluated, and
-    `debrief` would refuse forever. The full `runs` list is still returned unchanged for the
-    report's run-history table.
+    Narrows the candidate set to done runs with a non-null recorded `checkpoint` field,
+    matching `evaluate.py`'s own `best_checkpoint()` filter (it checks the run entry, not
+    whether the checkpoint file still exists on disk). Without this, a done run recorded
+    with `checkpoint: None` could be "best" here but never actually evaluated by
+    `evaluate.py`, leaving `debrief` refusing forever. The full `runs` list is still
+    returned unnarrowed for the report's run-history table.
     """
     runs = read_runs(project.runs_path)
     candidates = [r for r in runs if r.get("status") == "done" and r.get("checkpoint")]
@@ -152,6 +158,10 @@ class ReportStage(ScriptStageBase):
             "Run the next cell. `evaluate.py --split test` loads run "
             f"{best_run_id}'s checkpoint and scores it once on the rows no model has seen."
         )
+        # eval_test.json is derived output the cell regenerates; drop any stale copy so
+        # a leftover from an earlier (worse) run can't satisfy outputs_ready's mtime check
+        # or be mistaken by debrief for a fresh evaluation of the new best run.
+        (project.root / EVAL_TEST_FILE).unlink(missing_ok=True)
         return Handoff(
             stage=self.name, commands=[list(EVAL_TEST_COMMAND)], outputs=[EVAL_TEST_FILE]
         )
@@ -164,10 +174,9 @@ class ReportStage(ScriptStageBase):
             return
         eval_test = project.read_json(EVAL_TEST_FILE)
         if not isinstance(eval_test, dict):
-            ctx.display(
-                "I can't see `eval_test.json` yet. Run the `evaluate.py --split test` cell, "
-                "then run this cell again."
-            )
+            # Either the user hasn't run the handed-off cell yet (the orchestrator's
+            # waiting message already told them to) or prepare() itself declined/skipped
+            # and said why; either way there is nothing new to say here.
             return
         run_id = eval_test.get("run_id")
         if run_id is not None and run_id != best["run_id"]:
@@ -197,8 +206,12 @@ class ReportStage(ScriptStageBase):
         project.write_json(
             cfg.REPORT_META_FILE, {"best_run": best["run_id"], "n_runs": len(runs)}
         )
+        run_id = eval_test.get("run_id")
+        source = (
+            f"run {run_id}" if run_id is not None else f"checkpoint `{eval_test.get('checkpoint')}`"
+        )
         ctx.display(
-            f"Test {spec.metric}: **{_fmt(eval_test.get('value'))}** "
+            f"Test {spec.metric} for {source}: **{_fmt(eval_test.get('value'))}** "
             f"(target {spec.target_value:g}).\n\n{lessons}\n\n"
             f"Report written to `{cfg.REPORT_FILE}` in the project folder."
         )

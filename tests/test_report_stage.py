@@ -88,6 +88,7 @@ def test_declining_the_confirm_skips_without_a_handoff(clean_project):
     stage.debrief(ctx)
     assert not stage.is_complete(ctx)
     assert any("Skipped" in s for s in shown)
+    assert not any("evaluate.py" in s for s in shown)
 
 
 def test_rewrites_the_report_without_touching_test_again(clean_project):
@@ -116,6 +117,49 @@ def test_stale_eval_test_is_refused(clean_project):
     stage.debrief(ctx)
     assert not stage.is_complete(ctx)
     assert any("run 99" in s for s in shown)
+
+
+def test_prepare_drops_a_stale_eval_test_before_the_new_handoff(clean_project):
+    project = trained(clean_project)
+    record = {"run_id": 99, "checkpoint": "checkpoints/run99.joblib", "metric": "accuracy",
+              "value": 0.1, "loss": 1.0, "figures": []}
+    (project.root / EVAL_TEST_FILE).write_text(json.dumps(record), encoding="utf-8")
+    project.write_json(cfg.REPORT_META_FILE, {"best_run": 99, "n_runs": 99})
+
+    ctx, _shown, _figures = make_ctx(project)
+    stage = ReportStage()
+    handoff = stage.prepare(ctx)
+    assert handoff is not None
+    assert not (project.root / EVAL_TEST_FILE).exists()
+    assert not stage.outputs_ready(ctx, handoff)
+
+
+def test_run_id_none_names_the_checkpoint_instead_of_a_run(clean_project):
+    project = trained(clean_project)
+    ctx, shown, _figures = make_ctx(project)
+    stage = ReportStage()
+    run_cells(project, stage.prepare(ctx))
+    record = json.loads((project.root / EVAL_TEST_FILE).read_text(encoding="utf-8"))
+    record["run_id"] = None
+    record["checkpoint"] = "checkpoints/run1.joblib"
+    (project.root / EVAL_TEST_FILE).write_text(json.dumps(record), encoding="utf-8")
+
+    stage.debrief(ctx)
+    assert stage.is_complete(ctx)
+    assert any("checkpoints/run1.joblib" in s for s in shown)
+    report = project.report_path.read_text(encoding="utf-8")
+    assert "checkpoints/run1.joblib" in report
+
+
+def test_run_number_sorts_numerically_not_lexicographically(clean_project):
+    from mlagent.stages.report import _run_number
+
+    plots_dir = clean_project.plots_dir
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("run2_training.png", "run10_training.png"):
+        (plots_dir / name).touch()
+    ordered = sorted(plots_dir.glob("run*_training.png"), key=_run_number)
+    assert [p.name for p in ordered] == ["run2_training.png", "run10_training.png"]
 
 
 def test_no_successful_run_yet(clean_project):
@@ -148,8 +192,9 @@ def test_render_report_shape():
                  "target_value": 0.9},
         [{"run_id": 1, "status": "done", "best_val_metric": 0.8}],
         {"run_id": 1, "config": {"model_type": "linear"}, "best_val_metric": 0.8},
-        {"metric": "accuracy", "value": 0.78, "loss": 0.5},
+        {"metric": "accuracy", "value": 0.78, "loss": 0.5, "checkpoint": "checkpoints/run1.joblib"},
         "Lessons here.", [Path("plots/test_confusion.png")],
     )
     assert "# demo: training report" in report
     assert "![test_confusion](plots/test_confusion.png)" in report
+    assert "checkpoints/run1.joblib" in report
