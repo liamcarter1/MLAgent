@@ -200,6 +200,7 @@ def test_fallback_heuristic_when_the_llm_is_unavailable(clean_project):
     assert fallback_model({"clean_n_rows": 120}) == "linear"
     assert fallback_model({"clean_n_rows": 5000}) == "gradient_boosting"
     assert fallback_model({}) == "gradient_boosting"
+    assert fallback_model({"clean_n_rows": "lots"}) == "gradient_boosting"
 
     ctx, shown = make_ctx(clean_project, FakeLLM([]), ["Gradient boosting", "y"])
     CodegenStage().prepare(ctx)
@@ -208,10 +209,25 @@ def test_fallback_heuristic_when_the_llm_is_unavailable(clean_project):
     assert any("defaults" in s for s in shown)
 
 
+def test_unknown_model_recommendation_falls_back(clean_project):
+    from mlagent.stages.codegen import fallback_model
+
+    llm = FakeLLM([
+        [("tool", "recommend_model", {"model_type": "quantum", "reason": "Made up."})],
+        [("text", "chosen")],
+        [("tool", "propose_config", {"config": {}, "rationale": "Defaults."})],
+        [("text", "done")],
+    ])
+    ctx, _shown = make_ctx(clean_project, llm, ["Ask me after the explanation", "y"])
+    CodegenStage().prepare(ctx)
+    cfg = clean_project.read_json("config.json")
+    assert cfg["model_type"] == fallback_model(clean_project.read_json("data_meta.json"))
+
+
 def test_walkthrough_lists_every_generated_file(clean_project):
     ctx, shown = make_ctx(clean_project, FakeLLM([]), ["Gradient boosting", "y"])
     CodegenStage().prepare(ctx)
     text = "\n".join(shown)
     for name in ("data.py", "model.py", "train.py", "evaluate.py"):
-        assert name in text
+        assert f"### `{name}`" in text
     assert "#### settings" in text

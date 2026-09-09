@@ -72,8 +72,11 @@ RECOMMEND_TOOL = ToolSpec(
 
 def fallback_model(meta: dict) -> str:
     """What to recommend when Claude is unreachable: flexibility needs rows."""
-    rows = meta.get("clean_n_rows") or 0
-    return "linear" if 0 < int(rows) < SMALL_DATA_ROWS else "gradient_boosting"
+    try:
+        rows = int(meta.get("clean_n_rows") or 0)
+    except (TypeError, ValueError):
+        return "gradient_boosting"
+    return "linear" if 0 < rows < SMALL_DATA_ROWS else "gradient_boosting"
 
 
 def check_data(meta: dict, project_root: Path) -> list[str]:
@@ -258,9 +261,10 @@ class CodegenStage:
         except LLMError as exc:
             chosen = fallback_model(meta)
             rows = meta.get("clean_n_rows")
+            size = f" ({rows} rows)" if rows is not None else ""
             return chosen, (
-                f"(The assistant was unavailable: {exc}.) Going by the size of the dataset "
-                f"({rows} rows), {LABEL_FOR_MODEL[chosen]} is the safe default."
+                f"(The assistant was unavailable: {exc}.) Going by the size of the dataset"
+                f"{size}, {LABEL_FOR_MODEL[chosen]} is the safe default."
             )
         chosen = captured.get("model_type") or ""
         if chosen not in MODEL_LABELS.values():
