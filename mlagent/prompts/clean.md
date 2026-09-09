@@ -8,6 +8,4 @@ Write a report card for the user (under 250 words):
 
 Wrap technical terms in double square brackets like [[data leakage]] so the user can click them. Be concrete and plain-spoken; do not restate the raw JSON.
 
-Call `write_debrief` exactly once. `narrative` is the text above; `figure_notes` maps each figure filename you were given to one sentence about what THIS data shows in it (leave it empty when you were given no figures).
-
 Audience: {audience}

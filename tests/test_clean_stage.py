@@ -213,13 +213,18 @@ def test_learning_level_reaches_the_debrief_prompt(project):
     })
     prepare(project, df)
     project.write_json("spec.json", {**SPEC, "learning_level": "beginner"})
-    llm = FakeLLM([[("text", "x")], [("text", "done")]])
+    llm = FakeLLM([
+        [("text", "Getting your data ready to clean.")],  # prepare()'s preamble
+        [("text", "done")],  # the post-fix clean_debrief call
+    ])
     ctx, _shown, _figures = make_ctx(project, ["", "0.9", "0.3"], llm=llm)
     stage = CleanStage()
     stage.prepare(ctx)
     run_clean_script(project)
     stage.debrief(ctx)
-    assert "new to machine learning" in llm.calls[-1]["system"]
+    system = llm.calls[-1]["system"]
+    assert "new to machine learning" in system
+    assert "The cleaning steps have now run" in system  # unique to clean_debrief.md
 
 
 def test_llm_failure_does_not_block_cleaning(project):

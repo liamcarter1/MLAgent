@@ -144,15 +144,20 @@ def test_llm_failure_still_completes(project):
 
 
 def test_learning_level_reaches_the_debrief_prompt(project):
-    llm = FakeLLM([[("tool", "write_debrief", {"narrative": "n", "figure_notes": {}})],
-                   [("text", "done")]])
+    llm = FakeLLM([
+        [("text", "Getting your data ready.")],  # prepare()'s preamble
+        [("tool", "write_debrief", {"narrative": "n", "figure_notes": {}})],
+        [("text", "done")],
+    ])
     ctx, _shown, _figures = make_ctx(project, ["100", "3", "2", "0.5", "0.0", "n"], llm=llm)
     project.write_json("spec.json", {**SPEC, "learning_level": "beginner"})
     stage = DataStage()
     stage.prepare(ctx)
     run_profile_script(project)
     stage.debrief(ctx)
-    assert "new to machine learning" in llm.calls[-1]["system"]
+    system = llm.calls[-1]["system"]
+    assert "new to machine learning" in system
+    assert "You are the data stage of an ML training assistant" in system
 
 
 def test_missing_profile_debrief_says_so_and_stays_incomplete(project):

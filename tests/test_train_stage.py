@@ -244,13 +244,18 @@ def test_learning_level_reaches_the_debrief_prompt(clean_project):
     project = prepared(clean_project)
     spec = project.read_json("spec.json")
     project.write_json("spec.json", {**spec, "learning_level": "beginner"})
-    llm = FakeLLM([[("text", "x")], [("text", "done")]])
+    llm = FakeLLM([
+        [("text", "Training is about to start.")],  # prepare()'s preamble
+        [("text", "done")],  # the debrief narrative
+    ])
     ctx, _shown, _figures = make_ctx(project, llm)
     stage = TrainStage()
     handoff = stage.prepare(ctx)
     run_cells(project, handoff)
     stage.debrief(ctx)
-    assert "new to machine learning" in llm.calls[-1]["system"]
+    system = llm.calls[-1]["system"]
+    assert "new to machine learning" in system
+    assert "You are the training stage of an ML training assistant" in system
 
 
 def test_llm_failure_still_completes(clean_project):

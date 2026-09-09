@@ -43,6 +43,13 @@ def test_trim_levels_keeps_matching_blocks_only():
         assert "<!--" not in text
 
 
+def test_trim_levels_strips_a_stray_unterminated_marker():
+    text = "Always shown.\n\n<!--level:beginner-->\nNever closed.\n"
+    result = trim_levels(text, "beginner")
+    assert "<!--" not in result
+    assert "Always shown." in result and "Never closed." in result
+
+
 def test_material_loads_and_trims_a_teaching_file():
     expert = material("model_choices", "expert")
     beginner = material("model_choices", "beginner")
@@ -112,6 +119,7 @@ def test_walkthrough_intermediate_uses_one_call_for_all_files(tmp_path):
     teaching.walkthrough([a, b])
     text = "\n".join(shown)
     assert "Loads and splits." in text and "Builds the model." in text
+    assert "```python" in text  # the source itself is still shown, not just a summary
     assert len(llm.calls) == 1
 
 
@@ -158,3 +166,19 @@ def test_expert_debrief_asks_for_no_figure_notes(tmp_path):
     payload = llm.calls[0]["messages"][0]["content"]
     assert "figure_notes" not in payload or "figures" not in payload
     assert figures[0][1].startswith("Left: the spread of actual minus predicted")
+
+
+def test_expert_figure_captions_ignore_any_note_the_model_still_offers(tmp_path):
+    # Even if the model returns a figure_notes entry anyway, experts only ever see the
+    # fixed caption: `show_figures` gates the note on level, not just on what was asked.
+    fig = tmp_path / "test_residuals.png"
+    fig.write_bytes(b"x")
+    llm = FakeLLM([
+        [("tool", "write_debrief", {"narrative": "rmse 0.4 vs target 0.5.",
+                                     "figure_notes": {"test_residuals.png": "A stray note."}})],
+        [("text", "done")],
+    ])
+    teaching, _shown, figures = make("expert", llm)
+    teaching.debrief("report", {}, [fig])
+    assert figures[0][1].startswith("Left: the spread of actual minus predicted")
+    assert "A stray note." not in figures[0][1]

@@ -18,6 +18,9 @@ from mlagent.llm import LLM, LLMError, ToolSpec
 from mlagent.prompts_io import audience, load_prompt
 
 LEVEL_BLOCK_RE = re.compile(r"<!--level:([a-z, ]+)-->(.*?)<!--/level-->\n?", re.DOTALL)
+# Catches a stray open or close marker left behind by an unterminated or nested block,
+# so the output never contains a level marker even when the input is malformed.
+STRAY_LEVEL_MARKER_RE = re.compile(r"<!--/?level(?::[a-z, ]+)?-->\n?")
 EXPERT = "expert"
 BEGINNER = "beginner"
 
@@ -60,7 +63,9 @@ def trim_levels(text: str, level: str) -> str:
         levels = {part.strip() for part in match.group(1).split(",") if part.strip()}
         return match.group(2).strip() + "\n" if level in levels else ""
 
-    return LEVEL_BLOCK_RE.sub(keep, text).strip() + "\n"
+    trimmed = LEVEL_BLOCK_RE.sub(keep, text)
+    trimmed = STRAY_LEVEL_MARKER_RE.sub("", trimmed)
+    return trimmed.strip() + "\n"
 
 
 def material(name: str, level: str) -> str:
@@ -133,18 +138,13 @@ class Teaching:
             {"file": path.name, "source": path.read_text(encoding="utf-8")} for path in paths
         ]
         explanations = self._ask_walkthrough({"files": files})
-        lines = ["### The generated code", ""]
         for path in paths:
             note = (explanations.get(path.name) or "").strip()
-            titles = ", ".join(
-                title for title, _code in split_sections(path.read_text(encoding="utf-8"))
-            )
-            lines.append(f"**`{path.name}`** — sections: {titles}")
+            sections = split_sections(path.read_text(encoding="utf-8"))
+            self.display(f"### `{path.name}`")
             if note:
-                lines.append("")
-                lines.append(note)
-            lines.append("")
-        self.display("\n".join(lines).strip())
+                self.display(note)
+            self.display(render_walkthrough(sections, {}))
 
     def _ask_walkthrough(self, payload: dict) -> dict[str, str]:
         store: dict = {}
@@ -169,7 +169,7 @@ class Teaching:
         for path in paths:
             path = Path(path)
             caption = caption_for(path)
-            note = (notes.get(path.name) or "").strip()
+            note = (notes.get(path.name) or "").strip() if self.level != EXPERT else ""
             if note:
                 caption = f"{caption} {note}".strip()
             self.display_figure(path, caption)

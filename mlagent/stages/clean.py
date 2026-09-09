@@ -119,7 +119,7 @@ class CleanStage(ScriptStageBase):
         ctx.display(self._summary(profile, meta))
         payload = {"before": profile.get("before"), "after": profile.get("after"),
                    "steps": profile.get("steps"), "splits": meta.get("splits")}
-        note = ctx.teaching().debrief("clean", payload, figures, fallback="")
+        note = ctx.teaching().debrief("clean_debrief", payload, figures, fallback="")
         if note:
             ctx.display(note)
 

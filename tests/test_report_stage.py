@@ -90,7 +90,9 @@ def test_learning_level_reaches_the_debrief_prompt(clean_project):
     handoff = stage.prepare(ctx)
     run_cells(project, handoff)
     stage.debrief(ctx)
-    assert "new to machine learning" in llm.calls[-1]["system"]
+    system = llm.calls[-1]["system"]
+    assert "new to machine learning" in system
+    assert "You are the report stage of an ML training assistant" in system
 
 
 def test_declining_the_confirm_skips_without_a_handoff(clean_project):

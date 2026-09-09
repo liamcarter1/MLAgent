@@ -229,11 +229,8 @@ def test_unknown_model_recommendation_falls_back(clean_project):
 
 
 def test_walkthrough_lists_every_generated_file(clean_project):
-    # Beginner level: one call per file, each rendered section-by-section. At the
-    # default "intermediate" level the walkthrough is one paragraph per file instead
-    # (see tests/test_teaching.py for that shape).
-    spec = clean_project.read_json("spec.json")
-    clean_project.write_json("spec.json", {**spec, "learning_level": "beginner"})
+    # Default (intermediate) level: one call for all files, but each file still gets its
+    # own heading and its full fenced source, not just a summary.
     ctx, shown = make_ctx(clean_project, FakeLLM([]), ["Gradient boosting", "y"])
     CodegenStage().prepare(ctx)
     text = "\n".join(shown)
