@@ -14,7 +14,8 @@ from mlagent.ui.questions import ScriptedQuestioner
 
 
 def trained(project):
-    ctx = StageContext(project=project, llm=FakeLLM([]), questioner=ScriptedQuestioner(["y"]),
+    ctx = StageContext(project=project, llm=FakeLLM([]),
+                       questioner=ScriptedQuestioner(["Gradient boosting", "y"]),
                        explainer=None, display=lambda s: None)
     CodegenStage().prepare(ctx)
     cfg = project.read_json("config.json")

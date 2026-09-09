@@ -18,7 +18,8 @@ from mlagent.stages.train import TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
 
 # Answers for every non-confirm question asked across the pipeline, in order.
-# codegen, train and report ask only confirm() questions, which AutoApproveQuestioner answers.
+# train and report ask only confirm() questions, which AutoApproveQuestioner answers;
+# codegen also asks which model to use.
 ANSWERS = [
     "Predict churn from account data",  # intake: goal
     "Intermediate - explain the key ideas",  # intake: learning level
@@ -37,6 +38,7 @@ ANSWERS = [
     "",                                 # clean: extra columns to drop (none)
     "0.7",                              # clean: train fraction
     "0.15",                             # clean: validation fraction
+    "Gradient boosting",                # codegen: model choice
 ]
 
 ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "report"]

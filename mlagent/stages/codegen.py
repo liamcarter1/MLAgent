@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from mlagent import config as cfg
+from mlagent.codewalk import render_walkthrough, split_sections
 from mlagent.llm import LLMError, ToolSpec
 from mlagent.prompts_io import audience, load_prompt
 from mlagent.spec import Spec
@@ -25,6 +26,15 @@ from mlagent.templates_io import (
 )
 
 MAX_LISTED = 20
+SMALL_DATA_ROWS = 300
+MODEL_LABELS = {
+    "Linear / logistic regression": "linear",
+    "Random forest": "random_forest",
+    "Gradient boosting": "gradient_boosting",
+}
+LABEL_FOR_MODEL = {code: label for label, code in MODEL_LABELS.items()}
+ASK_LABEL = "Ask me after the explanation"
+
 PROPOSE_TOOL = ToolSpec(
     name="propose_config",
     description=(
@@ -41,6 +51,29 @@ PROPOSE_TOOL = ToolSpec(
     },
     handler=lambda inp: "recorded",
 )
+
+RECOMMEND_TOOL = ToolSpec(
+    name="recommend_model",
+    description=(
+        "Recommend one model family for this dataset. `reason` is shown to the user before "
+        "they choose, so make it about their data, not about models in general."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "model_type": {"type": "string", "enum": list(MODEL_LABELS.values())},
+            "reason": {"type": "string"},
+        },
+        "required": ["model_type", "reason"],
+    },
+    handler=lambda inp: "recorded",
+)
+
+
+def fallback_model(meta: dict) -> str:
+    """What to recommend when Claude is unreachable: flexibility needs rows."""
+    rows = meta.get("clean_n_rows") or 0
+    return "linear" if 0 < int(rows) < SMALL_DATA_ROWS else "gradient_boosting"
 
 
 def check_data(meta: dict, project_root: Path) -> list[str]:
@@ -122,16 +155,19 @@ class CodegenStage:
                 f"No training template for task type `{spec.task_type}` yet; "
                 "this milestone covers tabular tasks only."
             )
-            return
+            return None
         meta = ctx.project.read_json(META_FILE) or {}
         problems = check_data(meta, ctx.project.root)
         if problems:
             ctx.display("The data is not ready for training:\n- " + "\n- ".join(problems))
-            return
+            return None
 
         nested = load_schema(template)
-        schema = schema_for(nested, model_types(nested)[0])
+        model_type = self._choose_model(ctx, spec, meta, nested)
+        schema = schema_for(nested, model_type)
+
         proposal, rationale = self._propose(ctx, spec, meta, schema)
+        proposal = {**proposal, "model_type": model_type}
         config, notes = coerce_config(proposal, schema)
         written = copy_template(template, ctx.project.root)
         ctx.project.write_json(cfg.CONFIG_FILE, config)
@@ -139,8 +175,9 @@ class CodegenStage:
         files = ", ".join(f"`{p.name}`" for p in written) + ", `config.json`"
         message = [
             f"I wrote the training project into the project folder: {files}.",
-            "`train.py` trains [[gradient boosting]] trees; each [[epoch]] adds boosting rounds "
-            "and records train and validation [[loss]] so we can watch for [[overfitting]].",
+            f"`train.py` trains a **{LABEL_FOR_MODEL[model_type]}** model; each [[epoch]] "
+            "adds capacity and records train and validation [[loss]] so we can watch for "
+            "[[overfitting]]. `evaluate.py` scores a saved model on one split.",
             "",
             rationale,
             "",
@@ -156,9 +193,79 @@ class CodegenStage:
             ctx.project.write_json(cfg.CONFIG_FILE, config)
             ctx.display("Updated configuration:\n\n" + config_table(config, schema))
 
+        self._walkthrough(ctx, written)
+        return None
+
     def debrief(self, ctx: StageContext) -> None:
         """Codegen needs no cells from the user; everything happened in prepare."""
         return None
+
+    def _walkthrough(self, ctx: StageContext, written: list[Path]) -> None:
+        for path in written:
+            sections = split_sections(path.read_text(encoding="utf-8"))
+            titles = ", ".join(title for title, _code in sections)
+            ctx.display(f"### `{path.name}`\n\nSections: {titles}")
+            ctx.display(render_walkthrough(sections, {}))
+
+    def _choose_model(self, ctx: StageContext, spec: Spec, meta: dict, nested: dict) -> str:
+        recommended, reason = self._recommend(ctx, spec, meta, nested)
+        material = load_prompt("teaching/model_choices")
+        ctx.display(material)
+        ctx.display(f"**My recommendation: {LABEL_FOR_MODEL[recommended]}.** {reason}")
+        options = [ASK_LABEL, *MODEL_LABELS]
+        answer = ctx.questioner.choice(
+            f"Which model shall I set up? (I recommend {LABEL_FOR_MODEL[recommended]})",
+            options,
+            allow_other=False,
+            key="codegen.model_type",
+        )
+        if answer == ASK_LABEL:
+            return recommended
+        return MODEL_LABELS.get(answer, recommended)
+
+    def _recommend(
+        self, ctx: StageContext, spec: Spec, meta: dict, nested: dict
+    ) -> tuple[str, str]:
+        captured: dict = {}
+
+        def handler(inp: dict) -> str:
+            captured["model_type"] = str(inp.get("model_type") or "")
+            captured["reason"] = str(inp.get("reason") or "")
+            return "recorded"
+
+        tool = ToolSpec(
+            name=RECOMMEND_TOOL.name,
+            description=RECOMMEND_TOOL.description,
+            input_schema=RECOMMEND_TOOL.input_schema,
+            handler=handler,
+        )
+        prompt = json.dumps(
+            {
+                "spec": spec.to_dict(),
+                "data": meta_summary(meta),
+                "model_choices": model_types(nested),
+                "task": "recommend one model family",
+            },
+            indent=2,
+            default=str,
+        )
+        try:
+            ctx.llm.run(
+                load_prompt("codegen", audience=audience(spec.learning_level)),
+                [{"role": "user", "content": prompt}],
+                [tool],
+            )
+        except LLMError as exc:
+            chosen = fallback_model(meta)
+            rows = meta.get("clean_n_rows")
+            return chosen, (
+                f"(The assistant was unavailable: {exc}.) Going by the size of the dataset "
+                f"({rows} rows), {LABEL_FOR_MODEL[chosen]} is the safe default."
+            )
+        chosen = captured.get("model_type") or ""
+        if chosen not in MODEL_LABELS.values():
+            chosen = fallback_model(meta)
+        return chosen, captured.get("reason") or "It suits the shape of this dataset."
 
     def _propose(self, ctx: StageContext, spec: Spec, meta: dict, schema: dict) -> tuple[dict, str]:
         captured: dict = {}

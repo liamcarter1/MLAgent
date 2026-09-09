@@ -13,7 +13,8 @@ from mlagent.ui.questions import ScriptedQuestioner
 
 def prepared(project):
     """Run codegen with defaults so the training project exists."""
-    ctx = StageContext(project=project, llm=FakeLLM([]), questioner=ScriptedQuestioner(["y"]),
+    ctx = StageContext(project=project, llm=FakeLLM([]),
+                       questioner=ScriptedQuestioner(["Gradient boosting", "y"]),
                        explainer=None, display=lambda s: None)
     CodegenStage().prepare(ctx)
     cfg = project.read_json("config.json")
