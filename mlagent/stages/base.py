@@ -3,7 +3,7 @@
 A stage runs in two phases. `prepare` interviews the user, writes the scripts they will
 run, and returns a `Handoff` naming the notebook cells to run (or `None` when the stage
 needs no cells). `debrief` reads whatever those cells produced, shows it, and writes the
-stage's completion artifact.
+stage's completion artifact; returning `True` asks to be prepared again at once.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ class Stage(Protocol):
 
     def outputs_ready(self, ctx: StageContext, handoff: Handoff) -> bool: ...
 
-    def debrief(self, ctx: StageContext) -> None: ...
+    def debrief(self, ctx: StageContext) -> bool | None: ...
 
     def is_complete(self, ctx: StageContext) -> bool: ...
 
@@ -151,10 +151,20 @@ def stage_prepare(stage, ctx: StageContext) -> Handoff | None:
     return None
 
 
-def stage_debrief(stage, ctx: StageContext) -> None:
+def stage_debrief(stage, ctx: StageContext) -> object:
+    """Run a stage's second phase. A truthy return asks the orchestrator to prepare the
+    stage again in the same call (a tuning round is over, the next one starts)."""
     debrief = getattr(stage, "debrief", None)
-    if debrief is not None:
-        debrief(ctx)
+    if debrief is None:
+        return None
+    return debrief(ctx)
+
+
+def stage_reset(stage, ctx: StageContext) -> None:
+    """Let a stage forget its own loop state when it, or an earlier stage, is reset."""
+    on_reset = getattr(stage, "on_reset", None)
+    if on_reset is not None:
+        on_reset(ctx)
 
 
 def stage_outputs_ready(stage, ctx: StageContext, handoff: Handoff) -> bool:

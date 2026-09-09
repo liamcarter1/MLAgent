@@ -400,3 +400,85 @@ def test_two_phase_stage_with_no_handoff_that_fails_to_complete_can_be_rerun(pro
     assert orch.run() == ["slow2"]
     assert stage.prepared == 2
     assert orch.completed() == ["slow2"]
+
+
+class LoopingStage(ScriptStage):
+    """A two-phase stage that asks to be re-prepared `rounds` times before finishing."""
+
+    def __init__(self, name: str, rounds: int):
+        super().__init__(name)
+        self.rounds = rounds
+        self.resets = 0
+
+    def prepare(self, ctx: StageContext) -> Handoff:
+        handoff = super().prepare(ctx)
+        # outputs_ready compares mtimes with a one-second tolerance, so a stale output
+        # from the previous round could otherwise satisfy this round's handoff on a fast
+        # filesystem; the real tune stage unlinks its own outputs in prepare for the same
+        # reason.
+        (ctx.project.root / f"{self.name}_out.json").unlink(missing_ok=True)
+        return handoff
+
+    def debrief(self, ctx: StageContext):
+        self.debriefed += 1
+        if self.debriefed < self.rounds:
+            return True
+        ctx.project.write_json(f"{self.name}.json", {"ok": True})
+        return None
+
+    def on_reset(self, ctx: StageContext) -> None:
+        self.resets += 1
+        (ctx.project.root / f"{self.name}.json").unlink(missing_ok=True)
+
+
+def test_a_truthy_debrief_re_prepares_the_stage_in_the_same_run(project):
+    loop, after = LoopingStage("loop", rounds=3), RecordingStage("after")
+    orch = Orchestrator(make_ctx(project), [loop, after])
+    # Round 1: prepare, wait for the user.
+    assert orch.run() == [] and orch.waiting().stage == "loop" and loop.prepared == 1
+    user_runs(project, "loop")
+    # Round 2: debrief returns True -> prepared again, new handoff, still waiting.
+    assert orch.run() == [] and loop.debriefed == 1 and loop.prepared == 2
+    assert orch.waiting().stage == "loop"
+    assert "loop" in project.read_json("state.json")["prepared"]
+    user_runs(project, "loop")
+    assert orch.run() == [] and loop.debriefed == 2 and loop.prepared == 3
+    user_runs(project, "loop")
+    # Final round: debrief returns None, stage completes, the next stage runs.
+    assert orch.run() == ["loop", "after"] and loop.debriefed == 3 and loop.prepared == 3
+    assert orch.completed() == ["loop", "after"]
+
+
+def test_outputs_from_the_previous_round_do_not_satisfy_the_new_handoff(project):
+    """After a re-prepare the stale output must not be mistaken for the next round's."""
+    loop = LoopingStage("loop", rounds=2)
+    orch = Orchestrator(make_ctx(project), [loop])
+    orch.run()
+    user_runs(project, "loop")
+    orch.run()  # debrief 1 -> True -> prepare 2; prepare rewrites loop.py (newer than output)
+    assert loop.prepared == 2
+    assert orch.run() == [] and loop.debriefed == 1  # still waiting on round 2's output
+
+
+def test_reset_calls_on_reset_for_the_stage_and_every_later_one(project):
+    a, loop, c = RecordingStage("a"), LoopingStage("loop", rounds=1), LoopingStage("c", 1)
+    orch = Orchestrator(make_ctx(project), [a, loop, c])
+    orch.run()
+    user_runs(project, "loop")
+    orch.run()
+    user_runs(project, "c")
+    assert orch.run() == ["loop", "c"] or orch.completed() == ["a", "loop", "c"]
+    orch.reset("loop")
+    assert loop.resets == 1 and c.resets == 1
+    assert orch.completed() == ["a"]
+    assert not project.exists("loop.json") and not project.exists("c.json")
+
+
+def test_forced_debrief_returning_true_clears_the_handoff(project):
+    loop = LoopingStage("loop", rounds=2)
+    orch = Orchestrator(make_ctx(project), [loop])
+    orch.run()
+    orch.debrief("loop")  # returns True: the round is over, the stage must prepare again
+    state = project.read_json("state.json")
+    assert state["handoff"] is None and "loop" not in state["prepared"]
+    assert orch.run() == [] and loop.prepared == 2

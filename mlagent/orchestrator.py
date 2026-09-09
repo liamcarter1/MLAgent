@@ -1,4 +1,5 @@
-"""Run stages in order, checkpointing to state.json so a Colab reset can resume."""
+"""Run stages in order, checkpointing to state.json so a Colab reset can resume. A stage
+whose debrief returns True is prepared again in the same call (the tuning loop)."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from mlagent.stages.base import (
     stage_debrief,
     stage_outputs_ready,
     stage_prepare,
+    stage_reset,
     waiting_message,
 )
 from mlagent.ui.questions import FormQuestioner
@@ -58,6 +60,8 @@ class Orchestrator:
         if stage_name not in names:
             raise ValueError(f"unknown stage {stage_name!r}; known: {names}")
         idx = names.index(stage_name)
+        for stage in self.stages[idx:]:
+            stage_reset(stage, self.ctx)
         state = self._state()
         state["completed"] = [n for n in state["completed"] if n in names[:idx]]
         state["prepared"] = [n for n in state["prepared"] if n in names[:idx]]
@@ -72,6 +76,13 @@ class Orchestrator:
                 return stage
         raise ValueError(f"unknown stage {name!r}; known: {[s.name for s in self.stages]}")
 
+    def _forget_handoff(self, name: str) -> None:
+        """The round is over: drop the stage's handoff so the next run() prepares it again."""
+        state = self._state()
+        state["prepared"] = [n for n in state["prepared"] if n != name]
+        state["handoff"] = None
+        self._save(state)
+
     def debrief(self, name: str) -> None:
         """Force a stage's second phase, skipping the freshness check.
 
@@ -81,8 +92,9 @@ class Orchestrator:
         previous = self.ctx.stage
         self.ctx.stage = name
         try:
-            stage_debrief(stage, self.ctx)
-            if stage.is_complete(self.ctx):
+            if stage_debrief(stage, self.ctx):
+                self._forget_handoff(name)
+            elif stage.is_complete(self.ctx):
                 self.mark_complete(name)
         finally:
             self.ctx.stage = previous
@@ -118,23 +130,28 @@ class Orchestrator:
                 done = True
             if not done:
                 self.ctx.stage = stage.name
-                state = self._state()
-                state["current"] = stage.name
-                self._save(state)
-                if stage.name in state["prepared"]:
-                    handoff = Handoff.from_dict(state.get("handoff"))
-                else:
-                    self.ctx.display(f"**Stage: {stage.name}**")
-                    handoff = stage_prepare(stage, self.ctx)
+                while True:
                     state = self._state()
-                    state["handoff"] = handoff.to_dict() if handoff is not None else None
-                    if handoff is not None:
-                        state["prepared"] = [*state["prepared"], stage.name]
+                    state["current"] = stage.name
                     self._save(state)
-                if handoff is not None and not stage_outputs_ready(stage, self.ctx, handoff):
-                    self.ctx.display(waiting_message(handoff))
-                    return ran
-                stage_debrief(stage, self.ctx)
+                    if stage.name in state["prepared"]:
+                        handoff = Handoff.from_dict(state.get("handoff"))
+                    else:
+                        self.ctx.display(f"**Stage: {stage.name}**")
+                        handoff = stage_prepare(stage, self.ctx)
+                        state = self._state()
+                        state["handoff"] = handoff.to_dict() if handoff is not None else None
+                        if handoff is not None:
+                            state["prepared"] = [*state["prepared"], stage.name]
+                        self._save(state)
+                    if handoff is not None and not stage_outputs_ready(stage, self.ctx, handoff):
+                        self.ctx.display(waiting_message(handoff))
+                        return ran
+                    if not stage_debrief(stage, self.ctx):
+                        break
+                    # The stage asked to go round again: forget this handoff and prepare
+                    # afresh, so the next proposal appears right under this debrief.
+                    self._forget_handoff(stage.name)
                 if stage.is_complete(self.ctx):
                     self.mark_complete(stage.name)
                     ran.append(stage.name)
