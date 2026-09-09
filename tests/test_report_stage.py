@@ -80,6 +80,19 @@ def test_report_hands_off_the_test_evaluation_then_writes_markdown(clean_project
     assert all(caption for _p, caption in figures)
 
 
+def test_learning_level_reaches_the_debrief_prompt(clean_project):
+    project = trained(clean_project)
+    spec = project.read_json("spec.json")
+    project.write_json("spec.json", {**spec, "learning_level": "beginner"})
+    llm = FakeLLM([[("text", "The test set score was close to validation.")]])
+    ctx, _shown, _figures = make_ctx(project, llm)
+    stage = ReportStage()
+    handoff = stage.prepare(ctx)
+    run_cells(project, handoff)
+    stage.debrief(ctx)
+    assert "new to machine learning" in llm.calls[-1]["system"]
+
+
 def test_declining_the_confirm_skips_without_a_handoff(clean_project):
     project = trained(clean_project)
     ctx, shown, _figures = make_ctx(project, answers=("n",))

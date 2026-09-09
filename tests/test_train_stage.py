@@ -48,7 +48,11 @@ def run_cells(project, handoff):
 
 def test_real_training_run_is_logged_archived_and_debriefed(clean_project):
     project = prepared(clean_project)
-    llm = FakeLLM([[("text", "Best [[validation accuracy]] beat the target.")]])
+    # Two calls: prepare()'s preamble, then debrief()'s narrative.
+    llm = FakeLLM([
+        [("text", "Training is about to start.")],
+        [("text", "Best [[validation accuracy]] beat the target.")],
+    ])
     ctx, shown, figures = make_ctx(project, llm)
     stage = TrainStage()
     assert not stage.is_complete(ctx)
@@ -80,7 +84,7 @@ def test_real_training_run_is_logged_archived_and_debriefed(clean_project):
     assert set(shown_figures) == set(names)
     assert all(caption for _p, caption in figures)
     assert "[[validation accuracy]]" in "\n".join(shown)
-    prompt = llm.calls[0]["messages"][0]["content"]
+    prompt = llm.calls[-1]["messages"][0]["content"]  # the debrief call, not the preamble
     assert "best_epoch" in prompt
 
 
@@ -234,6 +238,19 @@ def test_narrative_headline_survives_a_non_numeric_target_value(clean_project):
     text = stage._narrative(ctx, FakeSpec(), entry, metrics, {}, [])
     assert "Run 1 finished" in text
     assert "target -" in text
+
+
+def test_learning_level_reaches_the_debrief_prompt(clean_project):
+    project = prepared(clean_project)
+    spec = project.read_json("spec.json")
+    project.write_json("spec.json", {**spec, "learning_level": "beginner"})
+    llm = FakeLLM([[("text", "x")], [("text", "done")]])
+    ctx, _shown, _figures = make_ctx(project, llm)
+    stage = TrainStage()
+    handoff = stage.prepare(ctx)
+    run_cells(project, handoff)
+    stage.debrief(ctx)
+    assert "new to machine learning" in llm.calls[-1]["system"]
 
 
 def test_llm_failure_still_completes(clean_project):

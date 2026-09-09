@@ -7,9 +7,6 @@ import re
 from pathlib import Path
 
 from mlagent import config as cfg
-from mlagent.captions import caption_for
-from mlagent.llm import LLMError, ask_text
-from mlagent.prompts_io import audience, load_prompt
 from mlagent.runlog import best_run, read_runs, summarise
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 
@@ -194,10 +191,8 @@ class ReportStage(ScriptStageBase):
             project.plots_dir / str(name) for name in (eval_test.get("figures") or [])
         ]
         run_figures = sorted(project.plots_dir.glob("run*_training.png"), key=_run_number)
-        for path in test_figures:
-            ctx.display_figure(path, caption_for(path))
 
-        lessons = self._lessons(ctx, spec, runs, best, eval_test)
+        lessons = self._lessons(ctx, spec, runs, best, eval_test, test_figures)
         report = render_report(
             project.name, spec.to_dict(), runs, best,
             eval_test, lessons, run_figures + test_figures,
@@ -217,7 +212,7 @@ class ReportStage(ScriptStageBase):
         )
 
     def _lessons(self, ctx: StageContext, spec, runs: list[dict], best: dict,
-                 eval_test: dict) -> str:
+                 eval_test: dict, figures: list[Path]) -> str:
         summary = {
             "spec": spec.to_dict(),
             "runs": [
@@ -230,15 +225,9 @@ class ReportStage(ScriptStageBase):
             "test": {"metric": eval_test.get("metric"), "value": eval_test.get("value"),
                      "loss": eval_test.get("loss")},
         }
-        try:
-            return ask_text(
-                ctx.llm,
-                load_prompt("report", audience=audience(ctx.learning_level())),
-                json.dumps(summary, default=str),
-            )
-        except LLMError:
-            return (
-                f"Best validation {spec.metric} was {_fmt(best.get('best_val_metric'))}; "
-                f"the [[test set]] gave {_fmt(eval_test.get('value'))}. A large gap between "
-                "them means the model does not [[generalise]] well."
-            )
+        fallback = (
+            f"Best validation {spec.metric} was {_fmt(best.get('best_val_metric'))}; "
+            f"the [[test set]] gave {_fmt(eval_test.get('value'))}. A large gap between "
+            "them means the model does not [[generalise]] well."
+        )
+        return ctx.teaching().debrief("report", summary, figures, fallback=fallback)

@@ -8,4 +8,6 @@ Write a short narrative (under 150 words) for the user:
 
 Wrap technical terms in double square brackets like [[class imbalance]] so the user can click them for an explanation. Do not repeat the full table; the user already sees it.
 
+Call `write_debrief` exactly once. `narrative` is the text above; `figure_notes` maps each figure filename you were given to one sentence about what THIS data shows in it (leave it empty when you were given no figures).
+
 Audience: {audience}

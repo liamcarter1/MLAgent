@@ -17,6 +17,7 @@ from mlagent import config
 from mlagent.llm import LLM
 from mlagent.project import Project
 from mlagent.spec import DEFAULT_LEARNING_LEVEL, Spec, SpecError
+from mlagent.teaching import Teaching
 from mlagent.ui.explain import Explainer
 from mlagent.ui.questions import Questioner
 
@@ -109,6 +110,15 @@ class StageContext:
             return self.spec().learning_level
         except (SpecError, TypeError, ValueError):
             return DEFAULT_LEARNING_LEVEL
+
+    def teaching(self) -> Teaching:
+        """The explainer for this stage, at the user's chosen level."""
+        return Teaching(
+            level=self.learning_level(),
+            llm=self.llm,
+            display=self.display,
+            display_figure=self.display_figure,
+        )
 
 
 class Stage(Protocol):

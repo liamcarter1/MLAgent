@@ -8,12 +8,12 @@ from pathlib import Path
 import pandas as pd
 
 from mlagent import config as cfg
-from mlagent.codewalk import render_walkthrough, split_sections
 from mlagent.llm import LLMError, ToolSpec
 from mlagent.prompts_io import audience, load_prompt
 from mlagent.spec import Spec
 from mlagent.stages.base import StageContext
 from mlagent.stages.data import META_FILE
+from mlagent.teaching import material
 from mlagent.templates_io import (
     CODE_FILES,
     TEMPLATE_FOR_TASK,
@@ -204,16 +204,11 @@ class CodegenStage:
         return None
 
     def _walkthrough(self, ctx: StageContext, written: list[Path]) -> None:
-        for path in written:
-            sections = split_sections(path.read_text(encoding="utf-8"))
-            titles = ", ".join(title for title, _code in sections)
-            ctx.display(f"### `{path.name}`\n\nSections: {titles}")
-            ctx.display(render_walkthrough(sections, {}))
+        ctx.teaching().walkthrough(written)
 
     def _choose_model(self, ctx: StageContext, spec: Spec, meta: dict, nested: dict) -> str:
         recommended, reason = self._recommend(ctx, spec, meta, nested)
-        material = load_prompt("teaching/model_choices")
-        ctx.display(material)
+        ctx.display(material("model_choices", ctx.learning_level()))
         ctx.display(f"**My recommendation: {LABEL_FOR_MODEL[recommended]}.** {reason}")
         options = [ASK_LABEL, *MODEL_LABELS]
         answer = ctx.questioner.choice(

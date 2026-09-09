@@ -8,7 +8,6 @@ import pandas as pd
 from pandas.api import types as ptypes
 
 from mlagent.audit import Issue, audit_tabular
-from mlagent.captions import caption_for
 from mlagent.cleaning import describe_step, render_clean_py
 from mlagent.llm import LLMError, ask_text
 from mlagent.profile import profile_dataframe
@@ -47,6 +46,7 @@ class CleanStage(ScriptStageBase):
         df = pd.read_csv(ctx.project.data_raw / RAW_FILE)
         before = profile_dataframe(df, target)
 
+        ctx.teaching().preamble("clean", {"target": target, "n_rows": int(len(df))})
         issues = audit_tabular(df, target)
         decisions = self._review_issues(ctx, issues, before)
         steps = self._collect_steps(decisions)
@@ -113,10 +113,15 @@ class CleanStage(ScriptStageBase):
         ctx.project.write_json(META_FILE, meta)
 
         profile = ctx.project.read_json(PROFILE_CLEAN_FILE) or {}
-        for name in profile.get("figures") or []:
-            path = ctx.project.plots_dir / str(name)
-            ctx.display_figure(path, caption_for(path))
+        figures = [
+            ctx.project.plots_dir / str(name) for name in (profile.get("figures") or [])
+        ]
         ctx.display(self._summary(profile, meta))
+        payload = {"before": profile.get("before"), "after": profile.get("after"),
+                   "steps": profile.get("steps"), "splits": meta.get("splits")}
+        note = ctx.teaching().debrief("clean", payload, figures, fallback="")
+        if note:
+            ctx.display(note)
 
     def _collect_steps(self, decisions: list[dict]) -> list[dict]:
         """Approved fixes become steps, unless the fix's column was itself dropped by

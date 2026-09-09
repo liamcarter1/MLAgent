@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
 
-from mlagent.captions import caption_for
 from mlagent.datasources.drive import list_candidates, load_table
 from mlagent.datasources.hf import load_tabular, search_datasets
-from mlagent.llm import LLMError, ask_text
 from mlagent.profile import profile_markdown
-from mlagent.prompts_io import audience, load_prompt
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.synth.tabular import TARGET, SynthTabularConfig, generate
 from mlagent.templates_io import COMMON_FILES, copy_common
@@ -50,6 +46,7 @@ class DataStage(ScriptStageBase):
             raise NotImplementedError(
                 f"{spec.task_type} data is not supported yet (image tasks arrive in Milestone 6)"
             )
+        ctx.teaching().preamble("data", {"spec": spec.to_dict()})
         if spec.data_source == "synthetic":
             df, target, meta = self._synthetic(ctx, TABULAR_TASKS[spec.task_type])
         elif spec.data_source == "drive":
@@ -89,10 +86,15 @@ class DataStage(ScriptStageBase):
             )
             return
         ctx.display(profile_markdown(profile))
-        for name in profile.get("figures") or []:
-            path = ctx.project.plots_dir / str(name)
-            ctx.display_figure(path, caption_for(path))
-        self._narrate(ctx, ctx.spec().to_dict(), profile)
+        figures = [
+            ctx.project.plots_dir / str(name) for name in (profile.get("figures") or [])
+        ]
+        payload = {
+            "spec": ctx.spec().to_dict(),
+            "profile": {k: v for k, v in profile.items() if k != "figures"},
+        }
+        fallback = "Data saved. Next: the [[data cleaning]] audit."
+        ctx.display(ctx.teaching().debrief("data", payload, figures, fallback=fallback))
 
     def _synthetic(self, ctx: StageContext, task: str):
         q = ctx.questioner
@@ -174,22 +176,3 @@ class DataStage(ScriptStageBase):
         df = self.hf_load(chosen.id)
         target = self._ask_target(ctx, df)
         return df, target, {"source": "huggingface", "hf_id": chosen.id}
-
-    def _narrate(self, ctx: StageContext, spec: dict, profile: dict) -> None:
-        payload = {k: v for k, v in profile.items() if k != "figures"}
-        prompt = (
-            "Project spec:\n" + json.dumps(spec, indent=2)
-            + "\n\nData profile:\n" + json.dumps(payload, indent=2)
-        )
-        try:
-            text = ask_text(
-                ctx.llm,
-                load_prompt("data", audience=audience(ctx.learning_level())),
-                prompt,
-            )
-        except LLMError as exc:
-            text = (
-                f"(Couldn't reach Claude for a narrative: {exc}) "
-                "Data saved. Next: the [[data cleaning]] audit."
-            )
-        ctx.display(text)

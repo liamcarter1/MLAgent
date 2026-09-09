@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 
 from mlagent import config as cfg
-from mlagent.captions import caption_for
-from mlagent.llm import LLMError, ask_text
-from mlagent.prompts_io import audience, load_prompt
 from mlagent.runlog import append_run, read_runs
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.templates_io import CODE_FILES
@@ -92,6 +88,7 @@ class TrainStage(ScriptStageBase):
             "`checkpoints/best.joblib`. `evaluate.py` then scores that model on the "
             f"[[validation set]] and draws the {spec.metric} figures. Run both cells."
         )
+        ctx.teaching().preamble("train", {"config": config, "metric": spec.metric})
         return Handoff(
             stage=self.name,
             commands=[["train.py"], ["evaluate.py"]],
@@ -147,8 +144,6 @@ class TrainStage(ScriptStageBase):
             return
 
         spec = ctx.spec()
-        for path in figures:
-            ctx.display_figure(path, caption_for(path))
         eval_data = project.read_json(EVAL_VAL_FILE) or {}
         ctx.display(self._narrative(ctx, spec, entry, metrics, eval_data, figures))
 
@@ -165,7 +160,6 @@ class TrainStage(ScriptStageBase):
             "stopped_early": metrics.get("stopped_early"),
             "validation": {"metric": eval_data.get("metric"), "value": eval_data.get("value"),
                            "loss": eval_data.get("loss")},
-            "figures": [p.name for p in figures],
         }
         target = spec.target_value
         target_str = f"{target:g}" if isinstance(target, int | float) else _fmt(target)
@@ -174,15 +168,9 @@ class TrainStage(ScriptStageBase):
             f"{_fmt(entry['best_val_metric'])} at epoch {_fmt(entry['best_epoch'])} "
             f"(target {target_str})."
         )
-        try:
-            narrative = ask_text(
-                ctx.llm,
-                load_prompt("train", audience=audience(ctx.learning_level())),
-                json.dumps(summary, default=str),
-            )
-        except LLMError:
-            narrative = (
-                "Look at the [[loss]] curves: if validation loss rises while training loss "
-                "keeps falling, the model is [[overfitting]]."
-            )
+        fallback = (
+            "Look at the [[loss]] curves: if validation loss rises while training loss "
+            "keeps falling, the model is [[overfitting]]."
+        )
+        narrative = ctx.teaching().debrief("train", summary, figures, fallback=fallback)
         return headline + "\n\n" + narrative

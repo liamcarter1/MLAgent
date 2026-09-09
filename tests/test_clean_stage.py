@@ -206,6 +206,22 @@ def test_target_becomes_float_via_nan_drop_is_saved_as_int(project):
     assert pd.api.types.is_integer_dtype(cleaned["target"].dtype)
 
 
+def test_learning_level_reaches_the_debrief_prompt(project):
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame({
+        "a": rng.normal(size=100), "b": rng.normal(size=100), "target": rng.integers(0, 2, 100),
+    })
+    prepare(project, df)
+    project.write_json("spec.json", {**SPEC, "learning_level": "beginner"})
+    llm = FakeLLM([[("text", "x")], [("text", "done")]])
+    ctx, _shown, _figures = make_ctx(project, ["", "0.9", "0.3"], llm=llm)
+    stage = CleanStage()
+    stage.prepare(ctx)
+    run_clean_script(project)
+    stage.debrief(ctx)
+    assert "new to machine learning" in llm.calls[-1]["system"]
+
+
 def test_llm_failure_does_not_block_cleaning(project):
     df = messy_df()
     prepare(project, df)

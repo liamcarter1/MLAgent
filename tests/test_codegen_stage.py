@@ -42,8 +42,12 @@ def test_llm_proposal_is_coerced_and_written(clean_project):
     text = "\n".join(shown)
     assert "[[learning rate]]" in text
     assert "Lowered epochs" in text
-    assert llm.calls and llm.calls[-1]["tools"][0].name == "propose_config"
-    prompt = llm.calls[-1]["messages"][0]["content"]
+    # A later call (the code walkthrough) also uses the LLM, so find the propose_config
+    # call specifically rather than assuming it is the last one.
+    propose_call = next(
+        c for c in llm.calls if c["tools"] and c["tools"][0].name == "propose_config"
+    )
+    prompt = propose_call["messages"][0]["content"]
     assert "config_schema" in prompt or "learning_rate" in prompt
 
 
@@ -225,9 +229,27 @@ def test_unknown_model_recommendation_falls_back(clean_project):
 
 
 def test_walkthrough_lists_every_generated_file(clean_project):
+    # Beginner level: one call per file, each rendered section-by-section. At the
+    # default "intermediate" level the walkthrough is one paragraph per file instead
+    # (see tests/test_teaching.py for that shape).
+    spec = clean_project.read_json("spec.json")
+    clean_project.write_json("spec.json", {**spec, "learning_level": "beginner"})
     ctx, shown = make_ctx(clean_project, FakeLLM([]), ["Gradient boosting", "y"])
     CodegenStage().prepare(ctx)
     text = "\n".join(shown)
     for name in ("data.py", "model.py", "train.py", "evaluate.py"):
         assert f"### `{name}`" in text
     assert "#### settings" in text
+
+
+def test_model_choices_material_has_no_level_markers(clean_project):
+    llm = FakeLLM([
+        [("tool", "recommend_model", {"model_type": "linear", "reason": "Few rows."})],
+        [("text", "chosen")],
+        [("tool", "propose_config", {"config": {}, "rationale": "Defaults."})],
+        [("text", "done")],
+    ])
+    ctx, shown = make_ctx(clean_project, llm, ["Ask me after the explanation", "y"])
+    CodegenStage().prepare(ctx)
+    text = "\n".join(shown)
+    assert "<!--" not in text
