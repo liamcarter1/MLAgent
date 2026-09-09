@@ -339,11 +339,15 @@ class TuneStage(ScriptStageBase):
 
     def _choose(self, ctx: StageContext, applied: list, config: dict, nested: dict):
         """Apply / edit / stop. Returns (new_config, diff, reason) or None to stop."""
+        # A Colab form answer for "tune.action" is fixed for the whole cell run, so once
+        # a no-op edit sends us round again, the re-ask must go to the fallback (console
+        # or scripted) questioner instead of returning that same form answer forever.
+        key = "tune.action"
         while True:
             options = [apply_label(i) for i in range(1, len(applied) + 1)]
             options += [EDIT_LABEL, STOP_LABEL]
             answer = ctx.questioner.choice("What shall we do?", options, allow_other=False,
-                                           key="tune.action")
+                                           key=key)
             if answer == STOP_LABEL:
                 return None
             if answer == EDIT_LABEL:
@@ -361,6 +365,7 @@ class TuneStage(ScriptStageBase):
                 diff = diff_config(config, edited)
                 if not diff:
                     ctx.display("That leaves the configuration unchanged; pick a proposal or stop.")
+                    key = None
                     continue
                 ctx.display("Edited configuration:\n\n" + config_table(edited, flat))
                 return edited, diff, f"{proposal.reason} (edited by you)"

@@ -17,7 +17,7 @@ from mlagent.stages.tune import (
     TuneStage,
     apply_label,
 )
-from mlagent.ui.questions import ScriptedQuestioner
+from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
 
 SMALL = {"epochs": 3, "iters_per_epoch": 3, "early_stopping_patience": 0}
 
@@ -294,8 +294,13 @@ def test_expert_level_skips_preamble_and_primer(clean_project):
 
 
 def test_debriefing_the_same_round_twice_logs_one_history_entry(clean_project):
-    """debrief must be idempotent per run: calling it again after a full round must not
-    append a second history entry or duplicate the runs.jsonl entry (ruling 3)."""
+    """debrief must be idempotent per run (ruling 3). This replays the `pending` dict
+    `prepare` originally wrote back into `tune_state.json` after a full, successful
+    round -- simulating a kernel death between the history append and the write that
+    clears `pending` -- so the second `debrief` call reaches the "a history entry for
+    this run_id already exists" guard instead of bailing out early on "no pending
+    round" the way a fresh tune_state.json would (that path is already covered by
+    test_debrief_without_a_pending_round_does_nothing)."""
     project = with_run_one(clean_project)
     llm = FakeLLM([
         [("text", "pre")],
@@ -306,15 +311,48 @@ def test_debriefing_the_same_round_twice_logs_one_history_entry(clean_project):
     ctx, _shown, _f = make_ctx(project, llm, answers=[apply_label(1)])
     stage = TuneStage()
     handoff = stage.prepare(ctx)
+    pending = project.read_json("tune_state.json")["pending"]
+    assert pending is not None
+
     run_cells(project, handoff)
-    assert stage.debrief(ctx) is True
+    first_result = stage.debrief(ctx)
+    assert first_result is True
     state_after_first = project.read_json("tune_state.json")
+    assert state_after_first["pending"] is None
     assert len(state_after_first["history"]) == 1
+    assert state_after_first["history"][0]["run_id"] == 2
     assert len(runlog.read_runs(project.runs_path)) == 2
 
+    # Replay the original pending round: the run is already logged and in history, but
+    # `pending` looks as if it was never cleared.
+    project.write_json("tune_state.json", dict(state_after_first, pending=pending))
+
     ctx2, _s2, _f2 = make_ctx(project)
-    result = stage.debrief(ctx2)
+    second_result = stage.debrief(ctx2)
     state_after_second = project.read_json("tune_state.json")
     assert len(state_after_second["history"]) == 1
     assert len(runlog.read_runs(project.runs_path)) == 2
-    assert result in (True, None)
+    assert state_after_second["pending"] is None
+    assert second_result == first_result
+
+
+def test_a_stale_form_answer_does_not_block_stopping_after_a_no_op_edit(clean_project):
+    """A Colab form's `tune.action` answer is fixed for the whole cell run. If a no-op
+    edit (the user edits the proposed change back to its original value) sends the
+    "what shall we do?" question round again, that re-ask must fall through to the
+    fallback (console/scripted) questioner instead of returning the same form answer
+    forever, or the user could never reach Stop."""
+    project = with_run_one(clean_project)
+    llm = FakeLLM([[("text", "pre")], *one_proposal({"learning_rate": 0.05})])
+    fallback = ScriptedQuestioner([
+        "learning_rate = 0.05",  # edit_config: pick the key the proposal changed
+        "0.1",                    # ...and set it back to its original value: a no-op
+        "Done",                   # finish editing
+        STOP_LABEL,                # the re-ask must reach here, not repeat EDIT_LABEL
+    ])
+    questioner = FormQuestioner({"tune.action": EDIT_LABEL}, fallback=fallback)
+    ctx, shown, _f = make_ctx(project, llm)
+    ctx.questioner = questioner
+    assert TuneStage().prepare(ctx) is None
+    assert project.read_json("tune_state.json")["decision"] == "stopped"
+    assert project.read_json("config.json")["learning_rate"] == 0.1  # nothing applied
