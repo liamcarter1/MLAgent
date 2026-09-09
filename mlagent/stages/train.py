@@ -89,6 +89,11 @@ class TrainStage(ScriptStageBase):
             f"[[validation set]] and draws the {spec.metric} figures. Run both cells."
         )
         ctx.teaching().preamble("train", {"config": config, "metric": spec.metric})
+        # metrics.json/eval_val.json are derived outputs the cells regenerate; drop any
+        # stale copy from an earlier run so it can't satisfy outputs_ready's mtime check
+        # before the user has actually rerun train.py and evaluate.py this time.
+        (project.root / cfg.METRICS_FILE).unlink(missing_ok=True)
+        (project.root / EVAL_VAL_FILE).unlink(missing_ok=True)
         return Handoff(
             stage=self.name,
             commands=[["train.py"], ["evaluate.py"]],

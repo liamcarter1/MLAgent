@@ -48,3 +48,56 @@ ipykernel's `_input_request`. This is caused by Colab's frontend, not `mlagent`.
 Restart session, rerun the install and setup cells, then run `start` again. Never rely on a
 `time.sleep` before `input()` to work around this: in testing that made `input()` return
 immediately with no box shown at all.
+
+## Milestone 4 (Learning mode and notebook-first pipeline)
+
+Run in a fresh Colab runtime, on a new project name, with `LEARNING_LEVEL` set to
+"Beginner - explain everything as we go" unless an item says otherwise.
+
+1. **The two-click script cell works.** After cell 4 (`2. Data`) the assistant stops and
+   says which cell to run. Cell 5 shows `%load profile.py`; run it once — the cell body is
+   replaced by the source of `profile.py` with `%load` commented out. Run it again: the
+   profile prints, four figures appear inline, and `profile_raw.json` lands in the project
+   folder on Drive. If `%load` misbehaves, change `SCRIPT_CELL_FORMATS["load"]` in
+   `mlagent/colab.py` to the `%run` form and re-run `python scripts/build_notebook.py`.
+2. **Form fields answer the fixed questions.** Fill cell 3's form (project name, level,
+   goal, task, metric, target, source, minutes, rounds, GPU) and run it: no `input()` box
+   appears for any of those, and `spec.json` on Drive contains exactly what you typed,
+   including `learning_level`.
+3. **A blank form field falls back cleanly.** Clear `GOAL` in cell 3, reset the project
+   (`orch.reset('intake')`) and run it: a one-line note names the empty field and an
+   `input()` box asks for the goal instead.
+4. **The data debrief carries captions.** Re-run cell 4 after cell 5: the profile table,
+   then each of the four figures with a caption beneath it, then the narrative. At beginner
+   level the caption has a second sentence about *your* data; switch the project to expert
+   level and confirm the extra sentence disappears.
+5. **Cleaning happens in the user's cell.** Cell 6 asks about each proposed fix in the
+   output area, then names cell 7. `%load clean.py` shows the operations and the embedded
+   `STEPS` list. Run it: `data/clean/data.csv` appears, and the before/after missing-value
+   figure is drawn in the cell. Edit one entry in `STEPS`, run the cell again, then re-run
+   cell 6 — the debrief reflects the edited cleaning.
+6. **Three models, one recommendation.** Cell 8 with `MODEL = "Ask me after the
+   explanation"` prints the three model descriptions, names a recommendation with a reason
+   about your dataset, and writes a `config.json` whose keys match that family only
+   (no `learning_rate` for a random forest). Re-run with `MODEL = "Random forest"` after
+   `orch.reset('codegen')` and confirm `config.json` changes accordingly.
+7. **The code walkthrough is level-appropriate.** At beginner level cell 8 ends with each
+   of `data.py`, `model.py`, `train.py`, `evaluate.py` broken into its sections with an
+   explanation under each. At expert level it prints only the filenames and section titles.
+8. **The training curve animates.** Cell 9 (`%load train.py`, run twice) redraws one
+   loss/metric figure in place as epochs complete — the transcript above it is not wiped —
+   and leaves `plots/training_curves.png` and `checkpoints/best.joblib` on Drive. Cell 10
+   (`evaluate.py`) writes `eval_val.json` and the validation figures.
+9. **Re-running the scripts logs a second run.** Edit `epochs` in `config.json`, run cells
+   9 and 10 again, then run cell 8's `orch.run(until='train')` cell: `runs.jsonl` gains
+   run 2, `plots/run2_training.png` exists, and the debrief compares the two.
+10. **The test set is touched once, on purpose.** Cell 11 names the best run and asks
+    before evaluating; answer "y", run cell 12 (`%run evaluate.py --split test`), then cell
+    13. `eval_test.json` records `run_id` equal to the best run, `report.md` opens on Drive
+    with every figure rendering, and re-running cell 11 says the test set was already
+    evaluated instead of asking again.
+11. **A runtime reset resumes at the right phase.** Runtime > Disconnect and delete
+    runtime. Re-run cells 1-3 only, then run cell 11: the orchestrator picks up where it
+    was (or reports nothing to do) without re-asking any earlier question. If a debrief
+    insists the outputs are missing because Drive's timestamps lag, `orch.debrief('train')`
+    forces it through.
