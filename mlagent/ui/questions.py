@@ -165,9 +165,12 @@ class FormQuestioner:
     A key that is absent from `answers` falls back silently: the form simply does not
     cover that question. A key that is present but empty or unusable falls back with a
     one-line note, because the user did fill the form in and deserves to know why they
-    are being asked again. Exception: `text()` treats a blank value as the answer
+    are being asked again. Exceptions: `text()` treats a blank value as the answer
     (the default) when the question has a non-None `default`, since a blank field on an
-    optional question is a legitimate "use the default" answer, not a skipped one.
+    optional question is a legitimate "use the default" answer, not a skipped one;
+    `choice()` falls back silently on a blank value (no note), since a blank data field
+    such as a target column or a Drive path is meant to simply ask, not to look like a
+    skipped question — the note is kept for a non-blank value that matches no option.
     """
 
     def __init__(
@@ -181,11 +184,15 @@ class FormQuestioner:
         self.note = note
         self.used: list[str] = []
 
+    @staticmethod
+    def _is_blank(value) -> bool:
+        return value is None or (isinstance(value, str) and not value.strip())
+
     def _raw(self, key: str | None):
         if key is None or key not in self.answers:
             return _MISSING
         value = self.answers[key]
-        if value is None or (isinstance(value, str) and not value.strip()):
+        if self._is_blank(value):
             self.note(f"The form field for '{key}' is empty; asking instead.")
             return _MISSING
         return value
@@ -204,9 +211,11 @@ class FormQuestioner:
         allow_other: bool = True,
         key: str | None = None,
     ) -> str:
-        raw = self._raw(key)
-        if raw is not _MISSING:
-            text = str(raw).strip()
+        # A blank value falls back silently (below), unlike the other question kinds:
+        # a blank target column or Drive path is meant to simply ask, not to look like
+        # a skipped answer that needs a note.
+        if key is not None and key in self.answers and not self._is_blank(self.answers[key]):
+            text = str(self.answers[key]).strip()
             for option in options:
                 if text.lower() == option.lower():
                     return self._accept(key, option)

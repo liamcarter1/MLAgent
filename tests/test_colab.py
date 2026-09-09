@@ -1,8 +1,11 @@
+import re
 from pathlib import Path
 
 from mlagent import colab
 from mlagent.llm import FakeLLM
 from mlagent.ui.questions import ScriptedQuestioner
+
+BUILD_NOTEBOOK = Path(__file__).resolve().parents[1] / "scripts" / "build_notebook.py"
 
 
 def test_setup_without_colab_adds_path_and_makes_dirs(tmp_path, monkeypatch):
@@ -102,6 +105,59 @@ def test_start_changes_into_the_project_folder(tmp_path, monkeypatch):
     assert Path(os.getcwd()).resolve() == (
         tmp_path / "drive" / "projects" / "demo"
     ).resolve()
+
+
+def _load_notebook_cells():
+    """Execute scripts/build_notebook.py and return its `cells` list of nbformat cells."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("build_notebook_module", BUILD_NOTEBOOK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.cells
+
+
+def test_every_param_field_has_a_hint_naming_it():
+    cells = _load_notebook_cells()
+    checked = 0
+    for cell in cells:
+        if cell.get("cell_type") != "code":
+            continue
+        source = cell["source"]
+        lines = source.splitlines()
+        for i, line in enumerate(lines):
+            m = re.match(r"^([A-Z_][A-Z0-9_]*)\s*=.*#@param", line)
+            if not m:
+                continue
+            var_name = m.group(1)
+            checked += 1
+            preceding = [j for j in range(i) if lines[j].lstrip().startswith("#@markdown")]
+            assert preceding, f"no #@markdown hint found before '{line}' in cell:\n{source}"
+            hint_line = lines[preceding[-1]]
+            label_match = re.search(r"\*\*(.+?)\*\*", hint_line)
+            assert label_match, f"hint line has no **label**: {hint_line!r}"
+            assert label_match.group(1).lower() == var_name.lower(), (
+                f"hint label {label_match.group(1)!r} does not name field {var_name!r}"
+            )
+    assert checked >= 15  # every #@param field across the form cells was checked
+
+
+def test_every_form_cell_has_a_purpose_line_after_its_title():
+    cells = _load_notebook_cells()
+    form_cells = 0
+    for cell in cells:
+        if cell.get("cell_type") != "code":
+            continue
+        lines = cell["source"].splitlines()
+        if not lines or "#@title" not in lines[0]:
+            continue
+        if "display-mode: 'form'" not in lines[0]:
+            continue
+        form_cells += 1
+        assert len(lines) > 1 and lines[1].lstrip().startswith("#@markdown"), (
+            f"form cell has no purpose line directly after its title: {lines[:2]}"
+        )
+    assert form_cells == 4  # the four #@param form cells (project/interview, data, clean, model)
 
 
 def test_purge_modules_forgets_generated_scripts(monkeypatch):

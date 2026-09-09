@@ -111,3 +111,24 @@ Run in a fresh Colab runtime, on a new project name, with `LEARNING_LEVEL` set t
     has a `config.json` with no `model_type` key. Opening it under this build, the codegen
     stage treats that as incomplete and re-runs, asking the model-family question again;
     this is expected, not a bug.
+
+### Guided notebook
+
+1. **Hints are visible under every field.** Open each of the four form cells (project and
+   interview, data, clean, model): every `#@param` box has a `#@markdown` hint immediately
+   above it explaining what it is and, where relevant, what a sensible default is; each form
+   cell opens with a one-line purpose statement.
+2. **A blank `TARGET_COLUMN` asks with the column list and no "empty field" note.** Leave
+   `TARGET_COLUMN` blank in cell 4 (`2. Data`) with a Drive or HuggingFace source: the
+   assistant lists the columns and marks its best guess, with no "form field is empty"
+   message first.
+3. **A blank `HF_QUERY` asks.** Leave `HF_QUERY` blank with a HuggingFace source: the
+   assistant asks for search keywords instead of searching for an empty string.
+4. **The profile, clean, train and evaluate cells each print a "How to read this" line
+   under every figure.** Run `profile.py`, `clean.py`, `train.py` and `evaluate.py`: each
+   figure they draw is followed in the cell's output by a line starting "How to read this:"
+   with the term markup (`[[...]]`) stripped, so the explanation is visible the first time a
+   figure appears, not only at the stage's own debrief.
+5. **The top of the notebook shows the roadmap.** The first markdown cell lists the six
+   pipeline steps with a "you do" / "you get" line for each, explains the two-click script
+   cells, names where files live on Drive, and says what to do when stuck.

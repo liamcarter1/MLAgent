@@ -52,6 +52,36 @@ DEFAULT_METRIC = {"tabular_classification": "accuracy", "tabular_regression": "r
 EPS = 1e-12
 MAX_ROC_CLASSES = 8
 
+# --- captions ---
+# Byte-identical to the matching entries in mlagent/captions.py (tests/test_template_evaluate.py
+# checks this); kept here too since this script never depends on the mlagent package.
+CAPTIONS = {
+    "confusion": (
+        "Rows are the true label, columns are what the model predicted, so the diagonal is "
+        "correct. A bright off-diagonal cell names the two classes the model keeps confusing."
+    ),
+    "roc_pr": (
+        "Left: the [[ROC curve]] — true positives against false positives as the decision "
+        "threshold moves; further above the dashed line is better. Right: [[precision]] "
+        "against [[recall]], which is the more honest view when classes are imbalanced."
+    ),
+    "per_class": (
+        "Precision and recall for each class. Precision is how often a prediction of that "
+        "class is right; recall is how much of that class the model finds. Small classes with "
+        "low bars are the ones to fix."
+    ),
+    "pred_vs_actual": (
+        "Each point is one row: actual value across, predicted value up. Perfect predictions "
+        "sit on the dashed diagonal. Points bending away from it at one end mean the model is "
+        "biased in that part of the range."
+    ),
+    "residuals": (
+        "Left: the spread of actual minus predicted; a bell centred on zero is what you want. "
+        "Right: the same errors against the prediction; a funnel or a curve means the model is "
+        "missing structure rather than just being noisy."
+    ),
+}
+
 # --- palette ---
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 SEQUENTIAL = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
@@ -189,20 +219,23 @@ def frame(ax, title: str) -> None:
     ax.set_axisbelow(True)
 
 
-def show(fig) -> None:
+def show(fig, kind: str) -> None:
     try:
         from IPython import get_ipython
         from IPython.display import display
     except ImportError:
-        return
-    if get_ipython() is not None:
-        display(fig)
+        pass
+    else:
+        if get_ipython() is not None:
+            display(fig)
+    caption = CAPTIONS.get(kind, "")
+    print("How to read this: " + caption.replace("[[", "").replace("]]", ""))
 
 
-def save(fig, plots_dir: Path, name: str) -> str:
+def save(fig, plots_dir: Path, name: str, kind: str) -> str:
     plots_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(plots_dir / f"{name}.png", dpi=110, bbox_inches="tight", facecolor=SURFACE)
-    show(fig)
+    show(fig, kind)
     plt.close(fig)
     return f"{name}.png"
 
@@ -321,16 +354,17 @@ def save_figures(record: dict, plots_dir: Path, split: str) -> list[str]:
     if record["task_type"] == "tabular_classification":
         labels = [str(c) for c in (record.get("classes") or sorted({*y_true, *y_pred}))]
         names = [save(confusion_figure(y_true, y_pred, labels), plots_dir,
-                      f"{split}_confusion")]
+                      f"{split}_confusion", "confusion")]
         if record.get("y_proba"):
             names.append(save(roc_pr_figure(y_true, record["y_proba"], labels), plots_dir,
-                              f"{split}_roc_pr"))
+                              f"{split}_roc_pr", "roc_pr"))
         names.append(save(per_class_figure(y_true, y_pred, labels), plots_dir,
-                          f"{split}_per_class"))
+                          f"{split}_per_class", "per_class"))
         return names
     return [
-        save(pred_vs_actual_figure(y_true, y_pred), plots_dir, f"{split}_pred_vs_actual"),
-        save(residual_figure(y_true, y_pred), plots_dir, f"{split}_residuals"),
+        save(pred_vs_actual_figure(y_true, y_pred), plots_dir, f"{split}_pred_vs_actual",
+             "pred_vs_actual"),
+        save(residual_figure(y_true, y_pred), plots_dir, f"{split}_residuals", "residuals"),
     ]
 
 
@@ -350,6 +384,10 @@ def cli_argv() -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # A caption below may contain a non-ASCII character (an em dash); on Windows a
+    # piped stdout otherwise defaults to the console codepage and mangles it.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Evaluate a checkpoint on one split.")
     parser.add_argument("--project", default=str(PROJECT_DIR))
     parser.add_argument("--split", default="val", choices=list(SPLITS))

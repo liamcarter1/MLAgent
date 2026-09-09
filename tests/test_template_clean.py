@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from mlagent import captions
 from mlagent.cleaning import OPS as LIBRARY_OPS
 from mlagent.cleaning import apply_steps, render_clean_py
 
@@ -103,6 +104,13 @@ def test_rendered_clean_py_is_importable_and_standalone(project):
 def test_template_ops_table_matches_the_cleaning_library():
     module = load_module("clean")
     assert set(module.OPS) == set(LIBRARY_OPS)
+
+
+def test_template_captions_match_mlagent_captions():
+    module = load_module("clean")
+    assert module.CAPTIONS == {
+        "clean_before_after_missing": captions.CAPTIONS["clean_before_after_missing"]
+    }
 
 
 def test_empty_steps_render_and_run(project):

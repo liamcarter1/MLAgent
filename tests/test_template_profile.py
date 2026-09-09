@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from mlagent import captions
 from mlagent.profile import profile_dataframe
 from mlagent.templates_io import COMMON_FILES, copy_common
 
@@ -67,6 +68,25 @@ def test_profile_script_tag_and_input_flags_and_regression_target(regression_pro
     assert "clean_target_distribution.png" in written["figures"]
     assert (project.plots_dir / "clean_target_distribution.png").exists()
     assert not (project.plots_dir / "clean_class_balance.png").exists()
+
+
+def test_template_captions_match_mlagent_captions():
+    module = load_module("profile")
+    kinds = ["histograms", "missing", "class_balance", "target_distribution", "correlation"]
+    assert module.CAPTIONS == {k: captions.CAPTIONS[k] for k in kinds}
+
+
+def test_profile_script_prints_a_caption_under_each_figure(clean_project):
+    project = clean_project
+    (project.data_raw).mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(project.data_clean / "data.csv")
+    df.to_csv(project.data_raw / "data.csv", index=False)
+    copy_common(COMMON_FILES, project.root)
+    result = run_profile(project)
+    for kind in ("histograms", "missing", "class_balance", "correlation"):
+        stripped = captions.CAPTIONS[kind].replace("[[", "").replace("]]", "")
+        line = "How to read this: " + stripped
+        assert result.stdout.count(line) == 1
 
 
 def test_profile_script_has_walkthrough_sections_and_an_argv_guard(project):

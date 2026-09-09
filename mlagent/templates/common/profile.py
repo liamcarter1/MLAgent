@@ -35,6 +35,36 @@ MAX_CORR_COLS = 20
 CATEGORICAL_MAX_UNIQUE = 50
 MAX_LISTED_CATEGORIES = 20
 
+# --- captions ---
+# Byte-identical to the matching entries in mlagent/captions.py (tests/test_template_profile.py
+# checks this); kept here too since this script never depends on the mlagent package.
+CAPTIONS = {
+    "histograms": (
+        "One [[histogram]] per numeric column: the x axis is the value, the height is how "
+        "many rows fall in that bucket. Look for columns that are all one value, long tails "
+        "on one side ([[skew]]), or two separate humps."
+    ),
+    "missing": (
+        "Each row of the chart is a column of your data and each pixel across is a row; dark "
+        "means the value is missing. Solid dark bands mean a column is mostly empty; vertical "
+        "stripes mean whole rows are missing values together."
+    ),
+    "class_balance": (
+        "How many rows carry each label. A large gap between the bars is [[class imbalance]]: "
+        "a model can score well just by always predicting the biggest class, so accuracy alone "
+        "will flatter it."
+    ),
+    "target_distribution": (
+        "The spread of the value you are predicting. Check the range is what you expect and "
+        "watch for a long tail: a few extreme targets pull [[regression]] errors around."
+    ),
+    "correlation": (
+        "How strongly each pair of numeric columns moves together, from -1 (opposite) through "
+        "0 (unrelated) to +1 (identical). A column almost perfectly correlated with the target "
+        "is often [[data leakage]]."
+    ),
+}
+
 # --- palette ---
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 SEQUENTIAL = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
@@ -169,21 +199,24 @@ def numeric_columns(df: pd.DataFrame) -> list[str]:
     ]
 
 
-def show(fig) -> None:
-    """Display in a notebook if one is running; do nothing from a plain shell."""
+def show(fig, kind: str) -> None:
+    """Display in a notebook if one is running, then print how to read the figure."""
     try:
         from IPython import get_ipython
         from IPython.display import display
     except ImportError:
-        return
-    if get_ipython() is not None:
-        display(fig)
+        pass
+    else:
+        if get_ipython() is not None:
+            display(fig)
+    caption = CAPTIONS.get(kind, "")
+    print("How to read this: " + caption.replace("[[", "").replace("]]", ""))
 
 
-def save(fig, plots_dir: Path, name: str) -> str:
+def save(fig, plots_dir: Path, name: str, kind: str) -> str:
     plots_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(plots_dir / f"{name}.png", dpi=110, bbox_inches="tight", facecolor=SURFACE)
-    show(fig)
+    show(fig, kind)
     plt.close(fig)
     return f"{name}.png"
 
@@ -269,22 +302,24 @@ def correlation_heatmap(df: pd.DataFrame):
 
 def draw_all(df: pd.DataFrame, profile: dict, plots_dir: Path, tag: str) -> list[str]:
     figures = [
-        save(histograms(df), plots_dir, f"{tag}_histograms"),
-        save(missing_matrix(df), plots_dir, f"{tag}_missing"),
+        save(histograms(df), plots_dir, f"{tag}_histograms", "histograms"),
+        save(missing_matrix(df), plots_dir, f"{tag}_missing", "missing"),
     ]
     target = profile.get("target")
     if target and target["kind"] == "categorical":
         figures.append(
             save(class_balance(target["counts"], target.get("total")), plots_dir,
-                 f"{tag}_class_balance")
+                 f"{tag}_class_balance", "class_balance")
         )
     elif target:
         figures.append(
             save(target_distribution(df[target["name"]]), plots_dir,
-                 f"{tag}_target_distribution")
+                 f"{tag}_target_distribution", "target_distribution")
         )
     if len(numeric_columns(df)) >= 2:
-        figures.append(save(correlation_heatmap(df), plots_dir, f"{tag}_correlation"))
+        figures.append(
+            save(correlation_heatmap(df), plots_dir, f"{tag}_correlation", "correlation")
+        )
     return figures
 
 

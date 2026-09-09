@@ -126,6 +126,31 @@ def test_huggingface_source_searches_picks_and_loads(project):
     assert any("No datasets found" in s for s in shown)
 
 
+def test_huggingface_blank_query_form_value_asks_instead_of_searching_empty(project):
+    """A blank `data.hf_query` form value must ask (Task 4): the query question has no
+    default, so a blank value is not silently accepted as an empty search."""
+    from mlagent.ui.questions import FormQuestioner
+
+    searches: list[str] = []
+
+    def fake_search(query, limit=8):
+        searches.append(query)
+        return [HFDataset("org/churn", 10, 1, "customer churn")]
+
+    def fake_load(dataset_id):
+        return pd.DataFrame({"a": [1, 2, 3], "y": [0, 1, 0]})
+
+    ctx, _shown, _figures = make_ctx(
+        project, ["churn", "org/churn — 10 downloads — customer churn", "y"],
+        source="huggingface",
+    )
+    fallback = ctx.questioner
+    ctx.questioner = FormQuestioner({"data.hf_query": ""}, fallback=fallback)
+    DataStage(hf_search=fake_search, hf_load=fake_load).prepare(ctx)
+    assert searches == ["churn"]
+    assert project.read_json(META_FILE)["hf_id"] == "org/churn"
+
+
 def test_image_task_is_not_supported_yet(project):
     ctx, _shown, _figures = make_ctx(project, [], task="image_classification")
     with pytest.raises(NotImplementedError):
