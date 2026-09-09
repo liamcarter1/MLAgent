@@ -129,7 +129,7 @@ Run in a fresh Colab runtime, on a new project name, with `LEARNING_LEVEL` set t
    figure they draw is followed in the cell's output by a line starting "How to read this:"
    with the term markup (`[[...]]`) stripped, so the explanation is visible the first time a
    figure appears, not only at the stage's own debrief.
-5. **The top of the notebook shows the roadmap.** The first markdown cell lists the six
+5. **The top of the notebook shows the roadmap.** The first markdown cell lists the seven
    pipeline steps with a "you do" / "you get" line for each, explains the two-click script
    cells, names where files live on Drive, and says what to do when stuck.
 

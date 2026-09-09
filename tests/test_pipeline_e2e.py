@@ -166,6 +166,7 @@ def test_one_guided_round_then_stop_and_the_report_scores_the_new_best(project, 
     assert runs[0]["applied_diff"] is None and runs[1]["applied_diff"]
     assert (project.runs_dir / "run2_metrics.json").exists()
     assert (project.plots_dir / "compare_curves.png").exists()
+    assert (project.plots_dir / "compare_runs.png").exists()
     state = project.read_json("tune_state.json")
     assert state["decision"] == "stopped" and state["round"] == 1
     assert [h["run_id"] for h in state["history"]] == [2]
