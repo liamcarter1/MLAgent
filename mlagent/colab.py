@@ -18,6 +18,7 @@ from mlagent.stages.data import META_FILE, DataStage
 from mlagent.stages.intake import IntakeStage
 from mlagent.stages.report import ReportStage
 from mlagent.stages.train import TrainStage
+from mlagent.stages.tune import TuneStage
 from mlagent.ui.explain import Explainer, Glossary
 from mlagent.ui.questions import ConsoleQuestioner
 from mlagent.ui.render import display_message
@@ -36,6 +37,7 @@ HANDOFF_COMMANDS: dict[str, list[list[str]]] = {
     "clean": [["clean.py"]],
     "codegen": [],
     "train": [["train.py"], ["evaluate.py"]],
+    "tune": [["train.py"], ["evaluate.py"]],
     "report": [["evaluate.py", "--split", "test"]],
 }
 
@@ -162,7 +164,8 @@ def start(
     _register_purge_hook()
     return Orchestrator(
         ctx,
-        [IntakeStage(), DataStage(), CleanStage(), CodegenStage(), TrainStage(), ReportStage()],
+        [IntakeStage(), DataStage(), CleanStage(), CodegenStage(), TrainStage(), TuneStage(),
+         ReportStage()],
     )
 
 

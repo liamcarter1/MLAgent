@@ -26,10 +26,11 @@ cells = [
         "with notebook access on.\n"
         "3. Run the cells in order.\n\n"
         "## How this notebook works\n\n"
-        "The assistant leads you through six steps. Steps 1-4 each have a form cell you "
+        "The assistant leads you through seven steps. Steps 1-4 each have a form cell you "
         "fill in. Step 5 (train) is two script cells you run: `train.py`, then "
-        "`evaluate.py`. Step 6 (report) is a cell you just run. Some steps also hand you a "
-        "script cell to run:\n\n"
+        "`evaluate.py`. Steps 6 (tune) and 7 (report) are cells you just run; tune sends you "
+        "back to the two train cells once per round. Some steps also hand you a script cell "
+        "to run:\n\n"
         "1. **Interview.** *You do:* answer the form below (project name, goal, task, metric, "
         "data source, budget). *You get:* a saved project specification, `spec.json`.\n"
         "2. **Data.** *You do:* give the path, search keywords, or the size of the "
@@ -43,7 +44,11 @@ cells = [
         "`evaluate.py`, `config.json`).\n"
         "5. **Train.** *You do:* run the training and evaluation cells. *You get:* a live "
         "loss/metric chart, a saved checkpoint, and validation figures with captions.\n"
-        "6. **Report.** *You do:* confirm you want the held-out test set scored. *You get:* "
+        "6. **Tune.** *You do:* pick one of the assistant's proposed changes (or stop), rerun "
+        "the two train cells, and run the tune cell again. *You get:* a diagnosis of the "
+        "curves, a comparison chart of every run, and a new run logged with the change that "
+        "made it. Repeat until you stop, hit your target, or use up MAX_ROUNDS.\n"
+        "7. **Report.** *You do:* confirm you want the held-out test set scored. *You get:* "
         "`report.md` with the final numbers and every figure, written once per best model.\n\n"
         "**Two-click script cells.** A script cell starts as `%load train.py`: run it once to "
         "pull the code into the cell so you can read (and edit) it — this comments out the "
@@ -55,7 +60,8 @@ cells = [
         "script, `config.json`, the figures in `plots/`, and `report.md`. Nothing here is "
         "hidden from you; every generated file is plain, readable Python or JSON.\n\n"
         "**If you get stuck.** *Train again* (near the bottom) reruns training after you edit "
-        "`config.json` by hand. *Ask about any term* looks up one word without rerunning "
+        "`config.json` by hand; the tune step is the guided way to do the same thing. "
+        "*Ask about any term* looks up one word without rerunning "
         "anything. *Redo a stage* resets a stage and everything after it, then reruns from "
         "there. Click any highlighted term in the assistant's messages for an explanation; "
         "clicking does nothing while a cell is waiting for you to type an answer — click after "
@@ -229,7 +235,16 @@ cells = [
     script_cell("train", 0),
     script_cell("train", 1),
     code(
-        "#@title 6. Report",
+        "#@title 6. Tune",
+        "# The assistant reads the run history, diagnoses the curves and proposes one to",
+        "# three changes. Pick one in the output below (or edit it, or stop), run the",
+        "# train.py and evaluate.py cells above again, then run this cell again to see",
+        "# whether it helped. It keeps going until you stop, the target is met, or",
+        "# MAX_ROUNDS is used up.",
+        "orch.run(until='tune')",
+    ),
+    code(
+        "#@title 7. Report",
         "# Score the best model once on the test rows it has never seen, then write "
         "report.md. The assistant asks before touching the test set.",
         "orch.run(until='report')",
@@ -239,13 +254,14 @@ cells = [
     nbf.v4.new_markdown_cell(
         "## Train again\n\n"
         "For a manual experiment: edit `config.json` in the project folder yourself, then "
-        "run the cell below. (The assistant's own guided tuning — where it proposes the "
-        "config change for you — arrives in a later milestone.) The cell resets the train "
-        "stage and re-prepares it, naming the `train.py` and `evaluate.py` cells above for "
-        "you to run again. Run those two cells, then run the `orch.run()` cell above (just "
-        "before this section) once more to log the new run and rewrite the report. "
-        "`orch.waiting()` says which cells the assistant is still waiting on; "
-        "`orch.debrief('train')` forces the debrief if Drive's timestamps lag."
+        "run the cell below. (The *6. Tune* cell is the guided alternative: the assistant "
+        "proposes the change for you.) This cell resets the train stage, the tuning loop and "
+        "the report, then re-prepares training, naming the `train.py` and `evaluate.py` cells "
+        "above for you to run again. Run those two cells, then the *6. Tune* cell to log the "
+        "new run and start a fresh tuning loop, or the `orch.run()` cell to go straight to the "
+        "report. `orch.waiting()` says which cells the assistant is still waiting on; "
+        "`orch.debrief('train')` forces the debrief if Drive's timestamps lag; "
+        "`orch.reset('tune')` restarts only the tuning loop."
     ),
     code("orch.reset('train')", "orch.run()"),
     nbf.v4.new_markdown_cell(

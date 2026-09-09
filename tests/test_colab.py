@@ -43,7 +43,7 @@ def test_make_context_and_start(tmp_path, monkeypatch):
     monkeypatch.chdir(Path.cwd())
     orch = colab.start("demo", drive_root=str(tmp_path), llm=FakeLLM([]))
     assert [s.name for s in orch.stages] == ["intake", "data", "clean", "codegen", "train",
-                                             "report"]
+                                             "tune", "report"]
     snap = colab._context_snapshot(orch.ctx.project, "train")
     assert snap["config"] is None and snap["latest_run"] is None
 
@@ -82,15 +82,18 @@ def test_cell_source_and_script_cells():
     assert colab.script_cells("intake") == []
     assert colab.script_cells("nope") == []
     assert set(colab.HANDOFF_COMMANDS) == {"intake", "data", "clean", "codegen", "train",
-                                           "report"}
+                                           "tune", "report"}
 
 
 def test_handoff_commands_match_what_the_stages_return(tmp_path):
     from mlagent import colab
     from mlagent.stages.clean import CLEAN_PY
     from mlagent.stages.report import EVAL_TEST_COMMAND
+    from mlagent.stages.tune import TUNE_COMMANDS
 
     assert colab.HANDOFF_COMMANDS["clean"] == [[CLEAN_PY]]
+    assert colab.HANDOFF_COMMANDS["train"] == [["train.py"], ["evaluate.py"]]
+    assert colab.HANDOFF_COMMANDS["tune"] == TUNE_COMMANDS
     assert colab.HANDOFF_COMMANDS["report"] == [list(EVAL_TEST_COMMAND)]
 
 
@@ -170,3 +173,13 @@ def test_purge_modules_forgets_generated_scripts(monkeypatch):
     monkeypatch.setitem(sys.modules, "evaluate", sentinel)
     colab._purge_modules()
     assert "model" not in sys.modules and "evaluate" not in sys.modules
+
+
+def test_notebook_has_a_tune_cell_between_evaluate_and_report():
+    sources = [c["source"] for c in _load_notebook_cells() if c.get("cell_type") == "code"]
+    tune = next(i for i, s in enumerate(sources) if "orch.run(until='tune')" in s)
+    assert sources[tune - 1] == "%load evaluate.py"
+    assert "orch.run(until='report')" in sources[tune + 1]
+    assert "#@param" not in sources[tune]
+    assert sources[tune].startswith("#@title 6. Tune")
+    assert "#@title 7. Report" in sources[tune + 1]

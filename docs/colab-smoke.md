@@ -132,3 +132,41 @@ Run in a fresh Colab runtime, on a new project name, with `LEARNING_LEVEL` set t
 5. **The top of the notebook shows the roadmap.** The first markdown cell lists the six
    pipeline steps with a "you do" / "you get" line for each, explains the two-click script
    cells, names where files live on Drive, and says what to do when stuck.
+
+## Milestone 5 (Tuning loop)
+
+Run on a project that has finished item 8 of the Milestone 4 list (one logged run), at
+beginner level unless an item says otherwise.
+
+1. **One guided round.** Run the `6. Tune` cell: it prints the tuning primer, a run table,
+   a one-line diagnosis with numbers in brackets, one to three proposals each with a
+   now/proposed table, and asks `What shall we do?` in an `input()` box. Answer
+   `Apply proposal 1`. `config.json` on Drive changes accordingly and the cell names the
+   `train.py` and `evaluate.py` cells. Run both, then run the `6. Tune` cell again: two
+   comparison figures appear first (validation loss per run, best score per run) with
+   captions, then the run-2 figures, then a narrative saying whether the change helped;
+   `runs.jsonl` gains run 2 with an `applied_diff`, `runs/run2_metrics.json` exists, and the
+   next round's proposals follow straight after, in the same cell output.
+2. **Edit a proposal.** In that next round answer `Edit a proposal first`, change one value
+   in the menu, pick `Done`, and confirm the applied diff lists both the proposal's change
+   and yours.
+3. **Stop.** Answer `Stop tuning and write the report`. The cell says tuning is stopped and
+   finishes. `tune_state.json` shows `"decision": "stopped"`. The `7. Report` cell then
+   names the best run (which may now be run 2 or 3) and asks before scoring the test set.
+4. **Target met exits without a question.** `orch.reset('intake')` is too much; instead
+   edit `spec.json`'s `target_value` down to a value run 1 already beat, run
+   `orch.reset('tune'); orch.run(until='tune')`: the cell says the target is met and asks
+   nothing.
+5. **Rounds run out.** Set `MAX_ROUNDS` to 1 at intake on a fresh project (or edit
+   `spec.json`), reset the tune stage, apply one proposal and rerun: after the debrief the
+   cell says the last allowed round is done, and `7. Report` proceeds.
+6. **A failed run gets a gentler proposal.** Edit `config.json` by hand to a value that
+   breaks training (for gradient boosting, `learning_rate: 1.0` with `epochs: 30` usually
+   produces a non-finite loss), use *Train again*, then the `6. Tune` cell: the diagnosis
+   reads "the last run failed" with the error, and proposal 1 lowers the learning rate.
+7. **Expert level is terse.** Switch `learning_level` to `expert` in `spec.json`, reset the
+   tune stage: no primer, no preamble, proposals with one-line reasons, comparison figures
+   with the fixed caption only.
+8. **Resetting train clears the loop.** *Train again* after a tuning loop: `tune_state.json`
+   disappears from Drive and the next `6. Tune` run starts at round 1 with the full history
+   in its run table.

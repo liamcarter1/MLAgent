@@ -17,6 +17,7 @@ from mlagent.stages.data import RAW_FILE, DataStage
 from mlagent.stages.intake import IntakeStage
 from mlagent.stages.report import ReportStage
 from mlagent.stages.train import TrainStage
+from mlagent.stages.tune import STOP_LABEL, TuneStage, apply_label
 from mlagent.ui.questions import ScriptedQuestioner
 
 FORM_ANSWERS = {
@@ -39,8 +40,9 @@ FORM_ANSWERS = {
     "clean.train_fraction": 0.7,
     "clean.val_fraction": 0.15,
     "codegen.model_type": "Gradient boosting",
+    "tune.action": STOP_LABEL,
 }
-ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "report"]
+ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "tune", "report"]
 
 
 class AutoApproveQuestioner(ScriptedQuestioner):
@@ -53,17 +55,17 @@ class AutoApproveQuestioner(ScriptedQuestioner):
         return True
 
 
-def make_orchestrator(project, stages=None):
+def make_orchestrator(project, stages=None, questioner=None):
     ctx = StageContext(
         project=project,
         llm=FakeLLM([]),  # empty script -> every call raises LLMError -> graceful fallback
-        questioner=AutoApproveQuestioner([]),
+        questioner=questioner or AutoApproveQuestioner([]),
         explainer=None,
         display=lambda s: None,
         display_figure=lambda path, caption="": None,
     )
     stages = stages or [IntakeStage(), DataStage(), CleanStage(), CodegenStage(),
-                        TrainStage(), ReportStage()]
+                        TrainStage(), TuneStage(), ReportStage()]
     return Orchestrator(ctx, stages)
 
 
@@ -89,6 +91,8 @@ def test_full_pipeline_runs_through_handoffs(project, advance):
     assert (project.plots_dir / "test_confusion.png").exists()
     runs = read_runs(project.runs_path)
     assert len(runs) == 1 and runs[0]["status"] == "done"
+    tune_state = project.read_json("tune_state.json")
+    assert tune_state["decision"] in ("stopped", "target_met") and tune_state["history"] == []
 
     # clean.py reproduces data/clean/data.csv exactly when run on data/raw/data.csv.
     raw_df = pd.read_csv(project.data_raw / RAW_FILE)
@@ -109,8 +113,10 @@ def test_a_second_training_run_is_logged_and_the_report_re_triggers(project, adv
     advance(orch, project, answers=FORM_ANSWERS)
 
     orch.reset("train")
-    ran = advance(orch, project)
-    assert ran == ["train", "report"]
+    assert not project.exists("tune_state.json") or project.read_json(
+        "tune_state.json")["history"] == []
+    ran = advance(orch, project, answers=FORM_ANSWERS)
+    assert ran == ["train", "tune", "report"]
     assert len(read_runs(project.runs_path)) == 2
     assert (project.plots_dir / "run2_training.png").exists()
     meta = project.read_json("report_meta.json")
@@ -146,3 +152,23 @@ def test_the_pipeline_runs_at_every_learning_level(project, advance, level):
     orch = make_orchestrator(project)
     assert advance(orch, project, answers=answers) == ALL_STAGES
     assert project.read_json("spec.json")["learning_level"] == level
+
+
+def test_one_guided_round_then_stop_and_the_report_scores_the_new_best(project, advance):
+    answers = {k: v for k, v in FORM_ANSWERS.items() if k != "tune.action"}
+    answers["intake.target_value"] = 1.5   # unreachable: the loop must not end on target_met
+    orch = make_orchestrator(
+        project, questioner=AutoApproveQuestioner([apply_label(1), STOP_LABEL]))
+    ran = advance(orch, project, answers=answers)
+    assert ran == ALL_STAGES
+    runs = read_runs(project.runs_path)
+    assert [r["run_id"] for r in runs] == [1, 2]
+    assert runs[0]["applied_diff"] is None and runs[1]["applied_diff"]
+    assert (project.runs_dir / "run2_metrics.json").exists()
+    assert (project.plots_dir / "compare_curves.png").exists()
+    state = project.read_json("tune_state.json")
+    assert state["decision"] == "stopped" and state["round"] == 1
+    assert [h["run_id"] for h in state["history"]] == [2]
+    best = max(runs, key=lambda r: r["best_val_metric"])
+    assert project.read_json("report_meta.json")["best_run"] == best["run_id"]
+    assert project.read_json("eval_test.json")["run_id"] == best["run_id"]
