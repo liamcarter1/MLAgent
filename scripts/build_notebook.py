@@ -136,11 +136,14 @@ cells = [
     code("orch.run()"),
     nbf.v4.new_markdown_cell(
         "## Train again\n\n"
-        "Edit `config.json` in the project folder, rerun the `train.py` and `evaluate.py` "
-        "cells above, then run `orch.run()` to log the new run and rewrite the report. "
-        "`orch.waiting()` says which cells the assistant is still waiting on; "
+        "Edit `config.json` in the project folder, then run the cell below: it resets the "
+        "train stage and re-prepares it, naming the `train.py` and `evaluate.py` cells "
+        "above for you to run again. Run those two cells, then run the `orch.run()` cell "
+        "above (just before this section) once more to log the new run and rewrite the "
+        "report. `orch.waiting()` says which cells the assistant is still waiting on; "
         "`orch.debrief('train')` forces the debrief if Drive's timestamps lag."
     ),
+    code("orch.reset('train')", "orch.run()"),
     nbf.v4.new_markdown_cell("### Ask about any term"),
     code("colab.explain('validation set')"),
     nbf.v4.new_markdown_cell(

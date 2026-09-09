@@ -43,19 +43,30 @@ FORM_ANSWERS = {
 ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "report"]
 
 
+# FORM_ANSWERS keys whose value is intentionally blank (e.g. "no extra columns to drop"):
+# FormQuestioner treats a blank string as unanswered and falls back to this questioner, but
+# the blank *is* the real answer here, not a missing scripted one.
+BLANK_FORM_KEYS = frozenset({"clean.drop_columns"})
+
+
 class AutoApproveQuestioner(ScriptedQuestioner):
     """Every confirm() is approved without consuming a scripted answer (the number of
     audit fixes varies with the data). Also serves as FormQuestioner's fallback: a blank
-    form field (e.g. "no extra columns to drop") is itself the answer, so an exhausted
-    scripted list falls back to the caller's default rather than raising."""
+    form field named in `blank_keys` is itself the answer, so it returns the caller's
+    default instead of raising; any other question still requires a scripted answer, so a
+    stage that starts asking something new still fails the test as before."""
+
+    def __init__(self, answers: list[str], blank_keys: frozenset[str] = frozenset()):
+        super().__init__(answers)
+        self._blank_keys = blank_keys
 
     def confirm(self, question: str, default: bool = True, key: str | None = None) -> bool:
         self.asked.append(question)
         return True
 
     def text(self, prompt: str, default: str | None = None, key: str | None = None) -> str:
-        self.asked.append(prompt)
-        if not self._answers and default is not None:
+        if key in self._blank_keys and default is not None:
+            self.asked.append(prompt)
             return default
         return super().text(prompt, default=default, key=key)
 
@@ -64,7 +75,7 @@ def make_orchestrator(project, stages=None):
     ctx = StageContext(
         project=project,
         llm=FakeLLM([]),  # empty script -> every call raises LLMError -> graceful fallback
-        questioner=AutoApproveQuestioner([]),
+        questioner=AutoApproveQuestioner([], blank_keys=BLANK_FORM_KEYS),
         explainer=None,
         display=lambda s: None,
         display_figure=lambda path, caption="": None,
@@ -104,7 +115,7 @@ def test_full_pipeline_runs_through_handoffs(project, advance):
     exec(compile((project.root / CLEAN_PY).read_text(encoding="utf-8"), "clean.py", "exec"),
          namespace)
     reproduced = namespace["clean"](raw_df).reset_index(drop=True)
-    assert len(reproduced) == len(clean_df)
+    pd.testing.assert_frame_equal(reproduced, clean_df, check_dtype=False)
 
     # Deleting state.json: every stage is complete via its artifacts, so nothing reruns.
     (project.root / "state.json").unlink()

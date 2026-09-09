@@ -88,14 +88,20 @@ Run in a fresh Colab runtime, on a new project name, with `LEARNING_LEVEL` set t
    loss/metric figure in place as epochs complete — the transcript above it is not wiped —
    and leaves `plots/training_curves.png` and `checkpoints/best.joblib` on Drive. Cell 10
    (`evaluate.py`) writes `eval_val.json` and the validation figures.
-9. **Re-running the scripts logs a second run.** Edit `epochs` in `config.json`, run cells
-   9 and 10 again, then run cell 8's `orch.run(until='train')` cell: `runs.jsonl` gains
-   run 2, `plots/run2_training.png` exists, and the debrief compares the two.
-10. **The test set is touched once, on purpose.** Cell 11 names the best run and asks
-    before evaluating; answer "y", run cell 12 (`%run evaluate.py --split test`), then cell
-    13. `eval_test.json` records `run_id` equal to the best run, `report.md` opens on Drive
-    with every figure rendering, and re-running cell 11 says the test set was already
-    evaluated instead of asking again.
+9. **Re-running the scripts logs a second run.** Edit `epochs` in `config.json`, then run
+   the cell under "Train again" (`orch.reset('train')` then `orch.run()`): the message
+   re-prepares the train stage and names cells 9 and 10 to run again. Run those two cells,
+   then run cell 13 (`orch.run()`) once more: `runs.jsonl` gains run 2,
+   `plots/run2_training.png` exists, and the debrief compares the two runs.
+10. **The test set is touched once, on purpose.** Resetting the train stage also resets the
+    report stage, so the same run of cell 13 from item 9 continues straight into the report
+    stage's own re-prepare: it names whichever of run 1 / run 2 now has the better
+    validation metric and asks before evaluating it on the test set. Answer "y", run cell 12
+    (`%run evaluate.py --split test`), then run cell 13 again to finish. `eval_test.json`
+    records `run_id` equal to that best run, and `report.md` opens on Drive with every
+    figure rendering. Repeat items 9-10 once more with a config change that does not beat
+    the existing best run: the report stage instead says the test set was already evaluated
+    for the current best run and rewrites the report without touching it again.
 11. **A runtime reset resumes at the right phase.** Runtime > Disconnect and delete
     runtime. Re-run cells 1-3 only, then run cell 11: the orchestrator picks up where it
     was (or reports nothing to do) without re-asking any earlier question. If a debrief
