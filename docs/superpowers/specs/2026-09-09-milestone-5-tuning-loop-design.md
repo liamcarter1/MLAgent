@@ -1,6 +1,6 @@
 # Milestone 5: the tuning loop
 
-Date: 2026-09-09. Builds on the Milestone 4 design (`2026-09-08-milestone-4-learning-mode-design.md`), whose "Milestone 5 outline" this spec refines. Decisions that changed from that outline are marked **(changed)** and collected under "Decisions to confirm" at the end.
+Date: 2026-09-09. Builds on the Milestone 4 design (`2026-09-08-milestone-4-learning-mode-design.md`), whose "Milestone 5 outline" this spec refines. Decisions that changed from that outline are marked **(changed)** and collected under "Decisions" at the end; the user confirmed all six on 2026-09-09.
 
 ## Goal
 
@@ -100,7 +100,9 @@ Drawn agent-side in `mlagent/plots.py`, which Milestone 4 reserved for exactly t
 - Two LLM calls per round (proposals, debrief) plus the round-1 preamble; expert level is one call per round.
 - `metrics.json` must be archived before the next run overwrites it; `archive_run` does it in the same debrief that logs the run.
 
-## Decisions to confirm
+## Decisions
+
+Confirmed by the user on 2026-09-09.
 
 1. A family switch is a tuner proposal, not a codegen re-run.
 2. No script patching for failed runs; failed runs get configuration proposals only.
