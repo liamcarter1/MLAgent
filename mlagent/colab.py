@@ -24,6 +24,55 @@ from mlagent.ui.render import display_message
 
 _LAST_CTX: StageContext | None = None
 
+# The single place the "run a script in its own cell" mechanism is defined. Swapping
+# %load for %run here changes every generated cell and the notebook builder at once.
+SCRIPT_CELL_FORMATS = {"load": "%load {script}", "run": "%run {script} {args}"}
+
+# What each stage's handoff asks the user to run. Kept in step with the stages by
+# tests/test_colab.py, and shared with scripts/build_notebook.py.
+HANDOFF_COMMANDS: dict[str, list[list[str]]] = {
+    "intake": [],
+    "data": [["profile.py"]],
+    "clean": [["clean.py"]],
+    "codegen": [],
+    "train": [["train.py"], ["evaluate.py"]],
+    "report": [["evaluate.py", "--split", "test"]],
+}
+
+# Scripts the user runs in their own cells. Python caches them after the first import,
+# so a regenerated file would be ignored without this purge.
+PURGED_MODULES = ("clean", "data", "evaluate", "model", "profile", "train")
+
+
+def cell_source(command: list[str]) -> str:
+    """The cell text for one handoff command."""
+    script, *args = command
+    if args:
+        return SCRIPT_CELL_FORMATS["run"].format(script=script, args=" ".join(args))
+    return SCRIPT_CELL_FORMATS["load"].format(script=script)
+
+
+def script_cells(stage_name: str) -> list[str]:
+    return [cell_source(command) for command in HANDOFF_COMMANDS.get(stage_name, [])]
+
+
+def _purge_modules() -> None:
+    for name in PURGED_MODULES:
+        sys.modules.pop(name, None)
+
+
+def _register_purge_hook() -> bool:
+    """Forget the generated modules before every cell, so an edited script is re-read."""
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return False
+    shell = get_ipython()
+    if shell is None:
+        return False
+    shell.events.register("pre_run_cell", lambda *_args, **_kwargs: _purge_modules())
+    return True
+
 
 def _try_mount_drive() -> None:
     try:
@@ -107,6 +156,10 @@ def start(
 ) -> Orchestrator:
     ctx = make_context(project_name, drive_root=drive_root, llm=llm)
     ctx.explainer.register_colab_callback()
+    # The generated scripts read and write project-relative paths, and the user runs them
+    # from their own cells, so the notebook's working directory must be the project.
+    os.chdir(ctx.project.root)
+    _register_purge_hook()
     return Orchestrator(
         ctx,
         [IntakeStage(), DataStage(), CleanStage(), CodegenStage(), TrainStage(), ReportStage()],

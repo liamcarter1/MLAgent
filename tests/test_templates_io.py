@@ -10,21 +10,21 @@ def test_template_dir_and_schema():
     assert d.is_dir()
     for name in tio.CODE_FILES:
         assert (d / name).exists()
-    schema = tio.load_schema("tabular_sklearn")
+    schema = tio.schema_for(tio.load_schema("tabular_sklearn"), "gradient_boosting")
     assert set(schema) >= {"learning_rate", "epochs", "iters_per_epoch", "seed"}
     with pytest.raises(FileNotFoundError):
         tio.template_dir("no_such_template")
 
 
 def test_default_config_matches_schema_defaults():
-    schema = tio.load_schema("tabular_sklearn")
+    schema = tio.schema_for(tio.load_schema("tabular_sklearn"), "gradient_boosting")
     cfg = tio.default_config(schema)
     assert cfg["learning_rate"] == 0.1 and cfg["epochs"] == 10 and cfg["max_depth"] is None
     assert tio.validate_config(cfg, schema) == []
 
 
 def test_validate_config_reports_problems():
-    schema = tio.load_schema("tabular_sklearn")
+    schema = tio.schema_for(tio.load_schema("tabular_sklearn"), "gradient_boosting")
     cfg = tio.default_config(schema)
     cfg["learning_rate"] = 5.0
     cfg["epochs"] = "ten"
@@ -38,7 +38,7 @@ def test_validate_config_reports_problems():
 
 
 def test_coerce_config_clamps_and_drops():
-    schema = tio.load_schema("tabular_sklearn")
+    schema = tio.schema_for(tio.load_schema("tabular_sklearn"), "gradient_boosting")
     cfg, notes = tio.coerce_config(
         {"learning_rate": 9, "epochs": 20.0, "max_depth": None, "bogus": 3, "seed": "7"}, schema
     )
@@ -61,7 +61,7 @@ def test_copy_template(project):
 
 
 def test_validate_rejects_nan_and_inf():
-    schema = tio.load_schema("tabular_sklearn")
+    schema = tio.schema_for(tio.load_schema("tabular_sklearn"), "gradient_boosting")
     cfg = tio.default_config(schema)
     cfg["learning_rate"] = float("nan")
     assert any("learning_rate" in p for p in tio.validate_config(cfg, schema))
@@ -70,7 +70,7 @@ def test_validate_rejects_nan_and_inf():
 
 
 def test_coerce_drops_nan_bool_and_non_dict():
-    schema = tio.load_schema("tabular_sklearn")
+    schema = tio.schema_for(tio.load_schema("tabular_sklearn"), "gradient_boosting")
     cfg, notes = tio.coerce_config({"learning_rate": float("nan"), "seed": True}, schema)
     assert cfg["learning_rate"] == 0.1 and cfg["seed"] == 42
     assert any("learning_rate" in n for n in notes) and any("seed" in n for n in notes)
@@ -79,3 +79,45 @@ def test_coerce_drops_nan_bool_and_non_dict():
     assert cfg == tio.default_config(schema) and notes
     cfg, notes = tio.coerce_config(None, schema)
     assert cfg == tio.default_config(schema) and notes == []
+
+
+def test_common_files_are_locatable_and_copied(tmp_path):
+    assert tio.COMMON_DIR.is_dir()
+    assert tio.common_file("profile.py").exists()
+    written = tio.copy_common(tio.COMMON_FILES, tmp_path)
+    assert [p.name for p in written] == list(tio.COMMON_FILES)
+    with pytest.raises(FileNotFoundError):
+        tio.common_file("no_such_script.py")
+
+
+def test_schema_is_nested_and_schema_for_flattens_it():
+    schema = tio.load_schema("tabular_sklearn")
+    assert set(schema) == {"common", "models"}
+    assert set(schema["common"]) == {"model_type", "epochs", "early_stopping_patience", "seed"}
+    assert tio.model_types(schema) == ["gradient_boosting", "random_forest", "linear"]
+
+    flat = tio.schema_for(schema, "random_forest")
+    assert set(flat) == {"model_type", "epochs", "early_stopping_patience", "seed",
+                         "trees_per_epoch", "max_depth", "min_samples_leaf", "max_features"}
+    assert "learning_rate" not in flat
+    assert tio.schema_for(schema, "linear")["alpha"]["default"] == 0.0001
+    with pytest.raises(ValueError):
+        tio.schema_for(schema, "quantum")
+
+
+def test_choice_rules_validate_and_coerce():
+    schema = tio.load_schema("tabular_sklearn")
+    flat = tio.schema_for(schema, "gradient_boosting")
+    cfg = tio.default_config(flat)
+    assert cfg["model_type"] == "gradient_boosting"
+    assert tio.validate_config(cfg, flat) == []
+
+    bad = {**cfg, "model_type": "quantum"}
+    assert any("model_type" in p for p in tio.validate_config(bad, flat))
+    bad_type = {**cfg, "model_type": 3}
+    assert any("model_type" in p for p in tio.validate_config(bad_type, flat))
+
+    coerced, notes = tio.coerce_config({"model_type": "quantum", "learning_rate": 0.05}, flat)
+    assert coerced["model_type"] == "gradient_boosting"
+    assert coerced["learning_rate"] == 0.05
+    assert any("model_type" in n for n in notes)

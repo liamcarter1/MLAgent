@@ -70,12 +70,13 @@ def test_describe_step():
     assert describe_step({"op": "drop_duplicates", "params": {}})
 
 
-def test_rendered_clean_py_reproduces_apply_steps():
+def test_render_clean_py_embeds_the_steps_and_reproduces_apply_steps():
     steps = [
-        {"op": "drop_duplicates", "params": {}},
-        {"op": "normalise_categories", "params": {"column": "cat"}},
+        {"op": "drop_columns", "params": {"columns": ["id"]}},
+        {"op": "fill_missing", "params": {"column": "x", "strategy": "median"}},
     ]
     source = render_clean_py(steps)
+    assert "from mlagent" not in source
     namespace: dict = {}
     exec(compile(source, "clean.py", "exec"), namespace)
     pd.testing.assert_frame_equal(namespace["clean"](df()), apply_steps(df(), steps))

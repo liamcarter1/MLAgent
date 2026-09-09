@@ -1,6 +1,6 @@
 import pytest
 
-from mlagent.spec import METRICS_FOR_TASK, Spec, SpecError
+from mlagent.spec import LEARNING_LEVELS, METRICS_FOR_TASK, Spec, SpecError
 
 
 def make_spec(**overrides) -> Spec:
@@ -43,3 +43,19 @@ def test_metric_must_match_task():
 def test_from_dict_rejects_unknown_keys():
     with pytest.raises(SpecError):
         Spec.from_dict({**make_spec().to_dict(), "bogus": 1})
+
+
+def test_learning_level_defaults_and_validates():
+    s = make_spec()
+    assert s.learning_level == "intermediate"
+    assert s.validate() == []
+    assert LEARNING_LEVELS == ("beginner", "intermediate", "expert")
+    bad = make_spec(learning_level="guru")
+    assert any("learning_level" in p for p in bad.validate())
+
+
+def test_learning_level_round_trips_and_is_optional_in_from_dict():
+    s = make_spec(learning_level="beginner")
+    assert Spec.from_dict(s.to_dict()).learning_level == "beginner"
+    legacy = {k: v for k, v in make_spec().to_dict().items() if k != "learning_level"}
+    assert Spec.from_dict(legacy).learning_level == "intermediate"

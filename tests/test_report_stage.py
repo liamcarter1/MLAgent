@@ -1,119 +1,169 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
+from mlagent import config as cfg
 from mlagent.llm import FakeLLM
-from mlagent.runner import RunResult
-from mlagent.stages.base import StageContext
+from mlagent.stages.base import Handoff, StageContext
 from mlagent.stages.codegen import CodegenStage
-from mlagent.stages.report import ReportStage, render_report
+from mlagent.stages.report import EVAL_TEST_FILE, ReportStage, render_report
 from mlagent.stages.train import TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
 
 
+def run_cells(project, handoff):
+    for command in handoff.commands:
+        result = subprocess.run(
+            [sys.executable, *command], cwd=str(project.root),
+            capture_output=True, text=True, encoding="utf-8", timeout=300,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def trained(project):
-    ctx = StageContext(project=project, llm=FakeLLM([]), questioner=ScriptedQuestioner(["y"]),
+    ctx = StageContext(project=project, llm=FakeLLM([]),
+                       questioner=ScriptedQuestioner(["Gradient boosting", "y"]),
                        explainer=None, display=lambda s: None)
-    CodegenStage().run(ctx)
-    cfg = project.read_json("config.json")
-    cfg.update({"epochs": 2, "iters_per_epoch": 3, "early_stopping_patience": 0})
-    project.write_json("config.json", cfg)
-    TrainStage(poll_seconds=0.05).run(ctx)
-    assert TrainStage().is_complete(ctx)
+    CodegenStage().prepare(ctx)
+    config = project.read_json("config.json")
+    config.update({"epochs": 2, "iters_per_epoch": 3, "early_stopping_patience": 0})
+    project.write_json("config.json", config)
+    stage = TrainStage()
+    run_cells(project, stage.prepare(ctx))
+    stage.debrief(ctx)
+    assert stage.is_complete(ctx)
     return project
 
 
 def make_ctx(project, llm=None, answers=("y",)):
-    shown = []
+    shown: list[str] = []
+    figures: list[tuple[Path, str]] = []
     ctx = StageContext(project=project, llm=llm or FakeLLM([]),
                        questioner=ScriptedQuestioner(list(answers)), explainer=None,
-                       display=shown.append)
-    return ctx, shown
+                       display=shown.append,
+                       display_figure=lambda path, caption="": figures.append((path, caption)))
+    return ctx, shown, figures
 
 
-def test_report_evaluates_test_once_and_writes_markdown(clean_project):
+def test_report_hands_off_the_test_evaluation_then_writes_markdown(clean_project):
     project = trained(clean_project)
     llm = FakeLLM([[("text", "The [[test set]] score was close to validation.")]])
-    ctx, shown = make_ctx(project, llm)
-    stage = ReportStage(poll_seconds=0.05)
+    ctx, shown, figures = make_ctx(project, llm)
+    stage = ReportStage()
     assert not stage.is_complete(ctx)
-    stage.run(ctx)
+
+    handoff = stage.prepare(ctx)
+    assert handoff == Handoff(stage="report",
+                              commands=[["evaluate.py", "--split", "test"]],
+                              outputs=["eval_test.json"])
+    assert any("test set" in s.lower() for s in shown)
+    assert not stage.outputs_ready(ctx, handoff)
+
+    run_cells(project, handoff)
+    stage.debrief(ctx)
     assert stage.is_complete(ctx)
-    assert project.exists("eval_test.json")
+
+    record = json.loads((project.root / EVAL_TEST_FILE).read_text(encoding="utf-8"))
+    assert record["run_id"] == 1
     report = project.report_path.read_text(encoding="utf-8")
     assert report.startswith("# ")
     assert "| run | status |" in report
     assert "## Held-out test result" in report and "accuracy" in report
-    assert "## Best configuration" in report and "learning_rate" in report
+    assert "## Best configuration" in report and "model_type" in report
     assert "## What we learned" in report and "[[test set]]" in report
-    assert "![" in report and "plots/test_confusion.png" in report
-    assert "plots/run1_training.png" in report
-    assert sorted(p.name for p in project.plots_dir.glob("test_*.png")) == [
-        "test_confusion.png", "test_per_class.png", "test_roc_pr.png"
-    ]
-    assert any("[[test set]]" in s for s in shown)
+    assert "plots/test_confusion.png" in report and "plots/run1_training.png" in report
+    assert project.read_json(cfg.REPORT_META_FILE)["best_run"] == 1
+    assert {Path(p).name for p, _c in figures} >= {"test_confusion.png"}
+    assert all(caption for _p, caption in figures)
 
 
-def test_declining_the_confirm_leaves_stage_incomplete(clean_project):
+def test_learning_level_reaches_the_debrief_prompt(clean_project):
     project = trained(clean_project)
-    ctx, _ = make_ctx(project, answers=["n"])
+    spec = project.read_json("spec.json")
+    project.write_json("spec.json", {**spec, "learning_level": "beginner"})
+    llm = FakeLLM([[("text", "The test set score was close to validation.")]])
+    ctx, _shown, _figures = make_ctx(project, llm)
     stage = ReportStage()
-    stage.run(ctx)
-    assert not stage.is_complete(ctx)
-    assert not project.exists("eval_test.json")
+    handoff = stage.prepare(ctx)
+    run_cells(project, handoff)
+    stage.debrief(ctx)
+    system = llm.calls[-1]["system"]
+    assert "new to machine learning" in system
+    assert "You are the report stage of an ML training assistant" in system
 
 
-def test_no_successful_run_stops_early(clean_project):
-    ctx, shown = make_ctx(clean_project)
-    stage = ReportStage()
-    stage.run(ctx)
-    assert not stage.is_complete(ctx)
-    assert any("train" in s.lower() for s in shown)
-
-
-def test_eval_failure_is_shown(clean_project):
+def test_declining_the_confirm_skips_without_a_handoff(clean_project):
     project = trained(clean_project)
-
-    def fake_runner(root, args, **kwargs):
-        return RunResult(returncode=1, metrics=None, log_tail=["KeyError: 'x'\n"], seconds=0.1)
-
-    ctx, shown = make_ctx(project)
-    stage = ReportStage(runner=fake_runner)
-    stage.run(ctx)
+    ctx, shown, _figures = make_ctx(project, answers=("n",))
+    stage = ReportStage()
+    assert stage.prepare(ctx) is None
+    stage.debrief(ctx)
     assert not stage.is_complete(ctx)
-    assert any("KeyError" in s for s in shown)
+    assert any("Skipped" in s for s in shown)
+    assert not any("evaluate.py" in s for s in shown)
 
 
-def test_report_evaluates_best_runs_checkpoint(clean_project):
-    """F2/F3: the report must evaluate the BEST run's checkpoint, not the last run's."""
-    from mlagent.runlog import best_run, read_runs
+def test_rewrites_the_report_without_touching_test_again(clean_project):
+    project = trained(clean_project)
+    ctx, _shown, _figures = make_ctx(project)
+    stage = ReportStage()
+    run_cells(project, stage.prepare(ctx))
+    stage.debrief(ctx)
+    first = project.report_path.read_text(encoding="utf-8")
 
-    project = trained(clean_project)  # run 1
-    ctx = StageContext(project=project, llm=FakeLLM([]), questioner=ScriptedQuestioner(["y"]),
-                       explainer=None, display=lambda s: None)
-    cfg = project.read_json("config.json")
-    cfg.update({"epochs": 1, "iters_per_epoch": 1, "early_stopping_patience": 0})
-    project.write_json("config.json", cfg)
-    TrainStage(poll_seconds=0.05).run(ctx)  # run 2, worse/different config
+    ctx2, shown2, _figures2 = make_ctx(project)
+    assert stage.prepare(ctx2) is None  # already evaluated for the best run
+    stage.debrief(ctx2)
+    assert any("already evaluated" in s.lower() for s in shown2)
+    assert project.report_path.read_text(encoding="utf-8") == first
 
-    runs = read_runs(project.runs_path)
-    assert len(runs) == 2
-    spec_metric = ctx.spec().metric
-    best = best_run(runs, spec_metric)
-    assert best is not None and best["checkpoint"]
 
-    recorded_args = []
+def test_stale_eval_test_is_refused(clean_project):
+    project = trained(clean_project)
+    ctx, shown, _figures = make_ctx(project)
+    stage = ReportStage()
+    run_cells(project, stage.prepare(ctx))
+    record = json.loads((project.root / EVAL_TEST_FILE).read_text(encoding="utf-8"))
+    record["run_id"] = 99
+    (project.root / EVAL_TEST_FILE).write_text(json.dumps(record), encoding="utf-8")
+    stage.debrief(ctx)
+    assert not stage.is_complete(ctx)
+    assert any("run 99" in s for s in shown)
 
-    def recording_runner(root, args, **kwargs):
-        recorded_args.append(args)
-        from mlagent.runner import run_script
-        return run_script(root, args, **kwargs)
 
-    ctx2, _shown = make_ctx(project)
-    stage = ReportStage(runner=recording_runner, poll_seconds=0.05)
-    stage.run(ctx2)
-    assert stage.is_complete(ctx2)
-    assert recorded_args == [["train.py", "--eval-test", "--checkpoint", best["checkpoint"]]]
+def test_prepare_drops_a_stale_eval_test_before_the_new_handoff(clean_project):
+    project = trained(clean_project)
+    record = {"run_id": 99, "checkpoint": "checkpoints/run99.joblib", "metric": "accuracy",
+              "value": 0.1, "loss": 1.0, "figures": []}
+    (project.root / EVAL_TEST_FILE).write_text(json.dumps(record), encoding="utf-8")
+    project.write_json(cfg.REPORT_META_FILE, {"best_run": 99, "n_runs": 99})
+
+    ctx, _shown, _figures = make_ctx(project)
+    stage = ReportStage()
+    handoff = stage.prepare(ctx)
+    assert handoff is not None
+    assert not (project.root / EVAL_TEST_FILE).exists()
+    assert not stage.outputs_ready(ctx, handoff)
+
+
+def test_run_id_none_names_the_checkpoint_instead_of_a_run(clean_project):
+    project = trained(clean_project)
+    ctx, shown, _figures = make_ctx(project)
+    stage = ReportStage()
+    run_cells(project, stage.prepare(ctx))
+    record = json.loads((project.root / EVAL_TEST_FILE).read_text(encoding="utf-8"))
+    record["run_id"] = None
+    record["checkpoint"] = "checkpoints/run1.joblib"
+    (project.root / EVAL_TEST_FILE).write_text(json.dumps(record), encoding="utf-8")
+
+    stage.debrief(ctx)
+    assert stage.is_complete(ctx)
+    assert any("checkpoints/run1.joblib" in s for s in shown)
+    report = project.report_path.read_text(encoding="utf-8")
+    assert "checkpoints/run1.joblib" in report
 
 
 def test_run_number_sorts_numerically_not_lexicographically(clean_project):
@@ -127,119 +177,39 @@ def test_run_number_sorts_numerically_not_lexicographically(clean_project):
     assert [p.name for p in ordered] == ["run2_training.png", "run10_training.png"]
 
 
-def test_report_meta_records_best_run_after_success(clean_project):
-    project = trained(clean_project)
-    llm = FakeLLM([[("text", "Lessons here.")]])
-    ctx, _ = make_ctx(project, llm)
-    stage = ReportStage(poll_seconds=0.05)
-    stage.run(ctx)
-    assert stage.is_complete(ctx)
-    meta = project.read_json("report_meta.json")
-    assert meta["best_run"] == 1
-    assert meta["n_runs"] == 1
-
-
-def test_better_run_after_report_makes_stage_incomplete_and_declining_leaves_it_incomplete(
-    clean_project,
-):
-    from mlagent.runlog import append_run
-
-    project = trained(clean_project)  # run 1
-    llm = FakeLLM([[("text", "Lessons for run 1.")]])
-    ctx, _ = make_ctx(project, llm)
-    stage = ReportStage(poll_seconds=0.05)
-    stage.run(ctx)
-    assert stage.is_complete(ctx)
-    run1 = project.read_json("report_meta.json")
-    assert run1["best_run"] == 1
-
-    # A better run 2 appears (accuracy is "higher is better" for this fixture's spec).
-    append_run(project.runs_path, {"status": "done", "best_val_metric": 0.99, "config": {}})
-    assert not stage.is_complete(ctx)
-
-    # Declining the re-evaluation leaves the stage incomplete and the report untouched.
-    ctx2, shown2 = make_ctx(project, answers=["n"])
-    stage.run(ctx2)
-    assert not stage.is_complete(ctx2)
-    assert any("last evaluated for run 1" in s and "run 2 is now the best model" in s
-               for s in shown2)
-    assert not any("untouched" in s for s in shown2)
-
-
-def test_worse_run_keeps_complete_and_rewrites_without_asking_or_evaluating(clean_project):
-    from mlagent.runlog import append_run
-
-    project = trained(clean_project)  # run 1
-    llm = FakeLLM([[("text", "Lessons for run 1.")]])
-    ctx, _ = make_ctx(project, llm)
-    stage = ReportStage(poll_seconds=0.05)
-    stage.run(ctx)
-    assert stage.is_complete(ctx)
-    meta_before = project.read_json("report_meta.json")
-    assert meta_before["n_runs"] == 1
-
-    # A worse run 2 appears; run 1 stays best.
-    append_run(project.runs_path, {"status": "done", "best_val_metric": 0.01, "config": {}})
-    assert stage.is_complete(ctx)
-
-    def failing_runner(root, args, **kwargs):
-        raise AssertionError("eval runner must not be invoked when the best run is unchanged")
-
-    ctx2, shown2 = make_ctx(project, llm=FakeLLM([[("text", "Lessons for both runs.")]]),
-                             answers=[])  # no answers available: confirm must not be called
-    stage2 = ReportStage(runner=failing_runner, poll_seconds=0.05)
-    stage2.run(ctx2)
-    assert stage2.is_complete(ctx2)
-    assert any("already evaluated for run 1" in s for s in shown2)
-    meta_after = project.read_json("report_meta.json")
-    assert meta_after["best_run"] == 1
-    assert meta_after["n_runs"] == 2
-    report = project.report_path.read_text(encoding="utf-8")
-    assert "| 1 |" in report and "| 2 |" in report
-
-
-def test_missing_meta_with_existing_eval_test_says_run_unknown(clean_project):
-    from mlagent.runlog import append_run
-
-    project = trained(clean_project)  # run 1
-    llm = FakeLLM([[("text", "Lessons for run 1.")]])
-    ctx, _ = make_ctx(project, llm)
-    stage = ReportStage(poll_seconds=0.05)
-    stage.run(ctx)
-    assert stage.is_complete(ctx)
-
-    # Simulate a project created before report_meta.json existed: eval_test.json is
-    # present but there is no sidecar recording which run it belongs to.
-    project.report_meta_path.unlink()
-
-    # A better run 2 appears.
-    append_run(project.runs_path, {"status": "done", "best_val_metric": 0.99, "config": {}})
-
-    ctx2, shown2 = make_ctx(project, answers=["n"])
-    stage.run(ctx2)
-    assert not any("run None" in s for s in shown2)
-    assert any("run is unknown" in s for s in shown2)
-    assert not any("untouched" in s for s in shown2)
-
-
-def test_confirm_wording_says_untouched_only_when_no_eval_test(clean_project):
-    project = trained(clean_project)
-    ctx, shown = make_ctx(project, answers=["n"])
+def test_no_successful_run_yet(clean_project):
+    ctx, shown, _figures = make_ctx(clean_project)
     stage = ReportStage()
-    stage.run(ctx)
-    assert any("untouched" in s for s in shown)
-    assert not any("last evaluated for run" in s for s in shown)
+    assert stage.prepare(ctx) is None
+    assert any("train" in s.lower() for s in shown)
 
 
-def test_render_report_structure():
-    runs = [{"run_id": 1, "status": "done", "epochs_run": 2, "best_epoch": 2,
-             "best_val_metric": 0.8, "final_train_loss": 0.3, "final_val_loss": 0.5,
-             "seconds": 1.0, "config": {"learning_rate": 0.1}}]
-    spec = {"goal": "Predict churn", "task_type": "tabular_classification",
-            "metric": "accuracy", "target_value": 0.9}
-    eval_test = {"metric": "accuracy", "value": 0.78, "loss": 0.55}
-    text = render_report("demo", spec, runs, runs[0], eval_test, "Lessons here.",
-                         [Path("plots/test_confusion.png")])
-    assert text.splitlines()[0] == "# demo: training report"
-    assert "Predict churn" in text and "0.78" in text and "0.9" in text
-    assert "Lessons here." in text and "![test_confusion](plots/test_confusion.png)" in text
+def test_best_run_candidates_exclude_done_runs_without_a_checkpoint(clean_project):
+    from mlagent.runlog import append_run
+    from mlagent.stages.report import _load_runs_and_best
+
+    project = clean_project
+    append_run(project.runs_path,
+               {"status": "done", "best_val_metric": 0.99, "checkpoint": None})
+    append_run(project.runs_path,
+               {"status": "done", "best_val_metric": 0.5, "checkpoint": "checkpoints/run2.joblib"})
+
+    ctx, _shown, _figures = make_ctx(project)
+    runs, best = _load_runs_and_best(project, ctx.spec())
+
+    assert len(runs) == 2  # the full history is returned unnarrowed
+    assert best is not None and best["run_id"] == 2
+
+
+def test_render_report_shape():
+    report = render_report(
+        "demo", {"goal": "g", "task_type": "tabular_classification", "metric": "accuracy",
+                 "target_value": 0.9},
+        [{"run_id": 1, "status": "done", "best_val_metric": 0.8}],
+        {"run_id": 1, "config": {"model_type": "linear"}, "best_val_metric": 0.8},
+        {"metric": "accuracy", "value": 0.78, "loss": 0.5, "checkpoint": "checkpoints/run1.joblib"},
+        "Lessons here.", [Path("plots/test_confusion.png")],
+    )
+    assert "# demo: training report" in report
+    assert "![test_confusion](plots/test_confusion.png)" in report
+    assert "checkpoints/run1.joblib" in report

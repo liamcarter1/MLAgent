@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import re
+from pathlib import Path
 
 import markdown as _markdown
 
@@ -105,3 +107,48 @@ def display_message(text: str) -> None:
     from IPython.display import HTML
 
     _display(HTML(to_html(text)))
+
+
+FIGURE_CSS = """<style>
+.mlagent-fig { margin: 0.75rem 0; max-width: 60rem; }
+.mlagent-fig img { max-width: 100%; height: auto; display: block; }
+.mlagent-fig figcaption {
+  font-family: system-ui, sans-serif; font-size: 0.85rem; color: #52514e;
+  line-height: 1.45; margin-top: 0.35rem;
+}
+.mlagent-fig .mlagent-figname { color: #898781; font-size: 0.75rem; }
+</style>"""
+
+
+def figure_html(path: Path | str, caption: str = "") -> str:
+    """A PNG with its caption beneath, as one self-contained HTML block.
+
+    The image is embedded as a data URI because a Colab cell cannot load a file from
+    Google Drive by path, and the caption goes through `to_html` so `[[term]]` markup
+    stays clickable.
+    """
+    path = Path(path)
+    name = html.escape(path.name)
+    if not path.exists():
+        return f'{FIGURE_CSS}<div class="mlagent-fig">missing figure: {name}</div>'
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    parts = [
+        FIGURE_CSS,
+        '<figure class="mlagent-fig">',
+        f'<img src="data:image/png;base64,{encoded}" alt="{name}">',
+    ]
+    if caption.strip():
+        parts.append(
+            f'<figcaption>{to_html(caption)}'
+            f'<div class="mlagent-figname">{name}</div></figcaption>'
+        )
+    else:
+        parts.append(f'<div class="mlagent-figname">{name}</div>')
+    parts.append("</figure>")
+    return "".join(parts)
+
+
+def display_figure(path: Path | str, caption: str = "") -> None:
+    from IPython.display import HTML
+
+    _display(HTML(figure_html(path, caption)))

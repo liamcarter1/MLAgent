@@ -1,20 +1,45 @@
 {
-  "learning_rate": {"type": "number", "default": 0.1, "min": 0.001, "max": 1.0,
-    "description": "Shrinkage applied to each boosting round; lower is slower but steadier."},
-  "epochs": {"type": "integer", "default": 10, "min": 1, "max": 100,
-    "description": "Number of epochs; each adds iters_per_epoch boosting rounds."},
-  "iters_per_epoch": {"type": "integer", "default": 10, "min": 1, "max": 100,
-    "description": "Boosting rounds (trees) added per epoch."},
-  "max_leaf_nodes": {"type": "integer", "default": 31, "min": 2, "max": 255,
-    "description": "Maximum leaves per tree; more leaves fit more detail."},
-  "max_depth": {"type": "integer", "default": null, "min": 1, "max": 32, "nullable": true,
-    "description": "Maximum tree depth; null means unlimited."},
-  "min_samples_leaf": {"type": "integer", "default": 20, "min": 1, "max": 200,
-    "description": "Minimum rows per leaf; higher values regularise."},
-  "l2_regularization": {"type": "number", "default": 0.0, "min": 0.0, "max": 10.0,
-    "description": "L2 penalty on leaf values; higher values regularise."},
-  "early_stopping_patience": {"type": "integer", "default": 5, "min": 0, "max": 50,
-    "description": "Stop when validation has not improved for this many epochs; 0 disables."},
-  "seed": {"type": "integer", "default": 42, "min": 0, "max": 1000000,
-    "description": "Random seed for the split and the model."}
+  "common": {
+    "model_type": {"type": "choice", "default": "gradient_boosting",
+      "choices": ["gradient_boosting", "random_forest", "linear"],
+      "description": "Which family of model to train."},
+    "epochs": {"type": "integer", "default": 10, "min": 1, "max": 100,
+      "description": "Number of epochs; each one adds capacity or does another pass."},
+    "early_stopping_patience": {"type": "integer", "default": 5, "min": 0, "max": 50,
+      "description": "Stop when validation has not improved for this many epochs; 0 disables."},
+    "seed": {"type": "integer", "default": 42, "min": 0, "max": 1000000,
+      "description": "Random seed for the model (the data split has its own frozen seed)."}
+  },
+  "models": {
+    "gradient_boosting": {
+      "learning_rate": {"type": "number", "default": 0.1, "min": 0.001, "max": 1.0,
+        "description": "Shrinkage applied to each boosting round; lower is slower but steadier."},
+      "iters_per_epoch": {"type": "integer", "default": 10, "min": 1, "max": 100,
+        "description": "Boosting rounds (trees) added per epoch."},
+      "max_leaf_nodes": {"type": "integer", "default": 31, "min": 2, "max": 255,
+        "description": "Maximum leaves per tree; more leaves fit more detail."},
+      "max_depth": {"type": "integer", "default": null, "min": 1, "max": 32, "nullable": true,
+        "description": "Maximum tree depth; null means unlimited."},
+      "min_samples_leaf": {"type": "integer", "default": 20, "min": 1, "max": 200,
+        "description": "Minimum rows per leaf; higher values regularise."},
+      "l2_regularization": {"type": "number", "default": 0.0, "min": 0.0, "max": 10.0,
+        "description": "L2 penalty on leaf values; higher values regularise."}
+    },
+    "random_forest": {
+      "trees_per_epoch": {"type": "integer", "default": 20, "min": 1, "max": 200,
+        "description": "Trees added to the forest each epoch."},
+      "max_depth": {"type": "integer", "default": null, "min": 1, "max": 32, "nullable": true,
+        "description": "Maximum tree depth; null means grow until the leaves are pure."},
+      "min_samples_leaf": {"type": "integer", "default": 1, "min": 1, "max": 200,
+        "description": "Minimum rows per leaf; higher values make each tree simpler."},
+      "max_features": {"type": "number", "default": 0.5, "min": 0.05, "max": 1.0,
+        "description": "Fraction of columns each split may consider; lower decorrelates trees."}
+    },
+    "linear": {
+      "learning_rate": {"type": "number", "default": 0.01, "min": 0.0001, "max": 1.0,
+        "description": "Step size for each gradient update."},
+      "alpha": {"type": "number", "default": 0.0001, "min": 0.0, "max": 1.0,
+        "description": "Strength of the L2 penalty on the coefficients."}
+    }
+  }
 }

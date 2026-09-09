@@ -1,4 +1,4 @@
-"""Clean stage: audit the raw data, explain the issues, apply approved fixes, record splits."""
+"""Clean stage: audit the raw data, agree the fixes, write clean.py, then read its output."""
 
 from __future__ import annotations
 
@@ -7,41 +7,26 @@ import json
 import pandas as pd
 from pandas.api import types as ptypes
 
-from mlagent import plots
 from mlagent.audit import Issue, audit_tabular
-from mlagent.cleaning import apply_steps, describe_step, render_clean_py
+from mlagent.cleaning import describe_step, render_clean_py
 from mlagent.llm import LLMError, ask_text
 from mlagent.profile import profile_dataframe
-from mlagent.prompts_io import load_prompt
-from mlagent.stages.base import StageContext
+from mlagent.prompts_io import audience, load_prompt
+from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.stages.data import META_FILE, RAW_FILE
 
 CLEAN_FILE = "data.csv"
+CLEAN_REL_PATH = "data/clean/data.csv"
 AUDIT_FILE = "audit.json"
 PROFILE_CLEAN_FILE = "profile_clean.json"
 CLEAN_PY = "clean.py"
 MIN_TEST_FRACTION = 0.05
+# Frozen independently of config.json's tunable `seed` so the held-out test split is the
+# same for every run of this project.
+SPLIT_SEED = 42
 
 
-def _cast_classification_target(
-    df: pd.DataFrame, target: str, is_classification: bool
-) -> pd.DataFrame:
-    """Whole-number float targets (e.g. from a NaN-induced float dtype) become int64
-    labels for classification tasks, so labels read as `0`/`1`, not `0.0`/`1.0`."""
-    if not is_classification or target not in df.columns:
-        return df
-    s = df[target]
-    if not ptypes.is_float_dtype(s) or s.isna().any():
-        return df
-    non_null = s.dropna()
-    if non_null.empty or not (non_null % 1 == 0).all():
-        return df
-    out = df.copy()
-    out[target] = s.astype("int64")
-    return out
-
-
-class CleanStage:
+class CleanStage(ScriptStageBase):
     name = "clean"
 
     def is_complete(self, ctx: StageContext) -> bool:
@@ -50,11 +35,10 @@ class CleanStage:
             (ctx.project.data_clean / CLEAN_FILE).exists()
             and ctx.project.exists(AUDIT_FILE)
             and bool(meta.get("splits"))
+            and bool(meta.get("feature_columns"))
         )
 
-    def run(self, ctx: StageContext) -> None:
-        spec = ctx.spec()
-        is_classification = spec.task_type == "tabular_classification"
+    def prepare(self, ctx: StageContext) -> Handoff:
         meta = ctx.project.read_json(META_FILE) or {}
         target = meta.get("target")
         if not target:
@@ -62,35 +46,50 @@ class CleanStage:
         df = pd.read_csv(ctx.project.data_raw / RAW_FILE)
         before = profile_dataframe(df, target)
 
+        ctx.teaching().preamble("clean", {"target": target, "n_rows": int(len(df))})
         issues = audit_tabular(df, target)
         decisions = self._review_issues(ctx, issues, before)
         steps = self._collect_steps(decisions)
-        cleaned = self._apply_steps_safely(ctx, df, steps)
 
-        drops = self._ask_drops(ctx, cleaned, target)
+        drops = self._ask_drops(ctx, df, target)
         if drops:
-            step = {"op": "drop_columns", "params": {"columns": drops}}
-            steps.append(step)
-            cleaned = self._apply_steps_safely(ctx, cleaned, [step])
+            steps.append({"op": "drop_columns", "params": {"columns": drops}})
         splits = self._ask_splits(ctx)
 
-        cleaned = _cast_classification_target(cleaned, target, is_classification)
-
-        ctx.project.data_clean.mkdir(parents=True, exist_ok=True)
-        clean_path = ctx.project.data_clean / CLEAN_FILE
-        cleaned.to_csv(clean_path, index=False)
-        (ctx.project.root / CLEAN_PY).write_text(render_clean_py(steps), encoding="utf-8")
-        after = profile_dataframe(cleaned, target)
-        ctx.project.write_json(PROFILE_CLEAN_FILE, after)
         ctx.project.write_json(
             AUDIT_FILE,
-            {
-                "issues": [i.to_dict() for i in issues],
-                "decisions": decisions,
-                "steps": steps,
-            },
+            {"issues": [i.to_dict() for i in issues], "decisions": decisions, "steps": steps},
+        )
+        (ctx.project.root / CLEAN_PY).write_text(render_clean_py(steps), encoding="utf-8")
+        meta.update(
+            {"splits": splits, "dropped_columns": drops, "split_seed": SPLIT_SEED}
+        )
+        ctx.project.write_json(META_FILE, meta)
+
+        listed = "\n".join(f"- {describe_step(s)}" for s in steps) or "- (no changes)"
+        ctx.display(
+            f"I wrote `clean.py` with {len(steps)} step(s):\n\n{listed}\n\n"
+            "Run it in the next cell. It reads `data/raw/data.csv`, writes "
+            "`data/clean/data.csv`, and never touches the raw file — so if you change your "
+            "mind you can edit `STEPS` in `clean.py` and run it again."
+        )
+        return Handoff(
+            stage=self.name,
+            commands=[[CLEAN_PY]],
+            outputs=[CLEAN_REL_PATH, PROFILE_CLEAN_FILE],
         )
 
+    def debrief(self, ctx: StageContext) -> None:
+        clean_path = ctx.project.data_clean / CLEAN_FILE
+        if not clean_path.exists():
+            ctx.display(
+                "I can't see `data/clean/data.csv` yet. Run the `clean.py` cell, then run this "
+                "cell again."
+            )
+            return
+        meta = ctx.project.read_json(META_FILE) or {}
+        target = str(meta.get("target"))
+        cleaned = pd.read_csv(clean_path)
         feature_columns = [str(c) for c in cleaned.columns if c != target]
         categorical_columns = [
             c for c in feature_columns
@@ -100,27 +99,29 @@ class CleanStage:
         ]
         meta.update(
             {
-                "splits": splits,
-                "clean_path": clean_path.relative_to(ctx.project.root).as_posix(),
-                "dropped_columns": drops,
+                "clean_path": CLEAN_REL_PATH,
                 "clean_n_rows": int(len(cleaned)),
                 "clean_n_cols": int(cleaned.shape[1]),
                 "feature_columns": feature_columns,
                 "categorical_columns": categorical_columns,
             }
         )
-        if is_classification and target in cleaned.columns:
+        if meta.get("task_type") == "tabular_classification" and target in cleaned.columns:
             labels = sorted(str(v) for v in cleaned[target].dropna().unique())
             meta["n_classes"] = len(labels)
             meta["class_labels"] = labels
         ctx.project.write_json(META_FILE, meta)
 
-        plots.present(
-            plots.before_after_missing(before, after),
-            ctx.project.plots_dir,
-            "clean_before_after_missing",
-        )
-        ctx.display(self._summary(before, after, steps))
+        profile = ctx.project.read_json(PROFILE_CLEAN_FILE) or {}
+        figures = [
+            ctx.project.plots_dir / str(name) for name in (profile.get("figures") or [])
+        ]
+        ctx.display(self._summary(profile, meta))
+        payload = {"before": profile.get("before"), "after": profile.get("after"),
+                   "steps": profile.get("steps"), "splits": meta.get("splits")}
+        note = ctx.teaching().debrief("clean_debrief", payload, figures, fallback="")
+        if note:
+            ctx.display(note)
 
     def _collect_steps(self, decisions: list[dict]) -> list[dict]:
         """Approved fixes become steps, unless the fix's column was itself dropped by
@@ -143,27 +144,6 @@ class CleanStage:
             d["applied"] = True
             steps.append(fix)
         return steps
-
-    def _apply_steps_safely(
-        self, ctx: StageContext, df: pd.DataFrame, steps: list[dict]
-    ) -> pd.DataFrame:
-        try:
-            return apply_steps(df, steps)
-        except Exception as exc:
-            failing = self._find_failing_step(df, steps)
-            detail = f" while applying step '{describe_step(failing)}'" if failing else ""
-            ctx.display(f"Cleaning failed{detail}: {exc}")
-            raise
-
-    @staticmethod
-    def _find_failing_step(df: pd.DataFrame, steps: list[dict]) -> dict | None:
-        current = df
-        for step in steps:
-            try:
-                current = apply_steps(current, [step])
-            except Exception:
-                return step
-        return None
 
     def _review_issues(self, ctx: StageContext, issues: list[Issue], profile: dict) -> list[dict]:
         if not issues:
@@ -202,7 +182,9 @@ class CleanStage:
             default=str,
         )
         try:
-            text = ask_text(ctx.llm, load_prompt("clean"), payload)
+            text = ask_text(
+                ctx.llm, load_prompt("clean", audience=audience(ctx.learning_level())), payload
+            )
         except LLMError as exc:
             text = f"(Couldn't reach Claude for the report card: {exc}) Here are the issues found:"
         ctx.display(text)
@@ -211,7 +193,7 @@ class CleanStage:
         cols = [str(c) for c in df.columns if c != target]
         raw = ctx.questioner.text(
             "Any other columns to drop before training? (comma-separated names, or leave blank)",
-            default="",
+            default="", key="clean.drop_columns",
         )
         chosen = [c.strip() for c in raw.split(",") if c.strip()]
         unknown = [c for c in chosen if c not in cols]
@@ -221,9 +203,11 @@ class CleanStage:
 
     def _ask_splits(self, ctx: StageContext) -> dict:
         q = ctx.questioner
-        train = q.number("Fraction of rows for training?", default=0.7, minimum=0.5, maximum=0.9)
+        train = q.number("Fraction of rows for training?", default=0.7, minimum=0.5, maximum=0.9,
+                         key="clean.train_fraction")
         val = q.number(
-            "Fraction for validation (used during tuning)?", default=0.15, minimum=0.05, maximum=0.3
+            "Fraction for validation (used during tuning)?", default=0.15, minimum=0.05,
+            maximum=0.3, key="clean.val_fraction",
         )
         test = round(1 - train - val, 4)
         if test < MIN_TEST_FRACTION:
@@ -235,18 +219,24 @@ class CleanStage:
             )
         return {"train": round(train, 4), "val": round(val, 4), "test": test}
 
-    def _summary(self, before: dict, after: dict, steps: list[dict]) -> str:
+    def _summary(self, profile: dict, meta: dict) -> str:
+        before = profile.get("before") or {}
+        after = profile.get("after") or {}
+        steps = profile.get("steps") or []
         lines = [
             "### Cleaning summary",
             "",
-            f"- Rows: {before['n_rows']} -> {after['n_rows']}",
-            f"- Columns: {before['n_cols']} -> {after['n_cols']}",
+            f"- Rows: {before.get('n_rows', '?')} -> {after.get('n_rows', '?')}",
+            f"- Columns: {before.get('n_cols', '?')} -> {after.get('n_cols', '?')}",
             f"- Steps applied: {len(steps)}",
         ]
         lines.extend(f"  - {describe_step(s)}" for s in steps)
+        splits = meta.get("splits") or {}
         lines += [
             "",
-            "Cleaned data saved to `data/clean/data.csv`; the steps are in `clean.py` so they can "
-            "be re-run on new data. Next: generating the [[training pipeline]].",
+            f"Splits frozen at train {splits.get('train')}, validation {splits.get('val')}, "
+            f"test {splits.get('test')} with seed {meta.get('split_seed', SPLIT_SEED)}, so every "
+            "run sees the same rows. Next: choosing a model and generating the "
+            "[[training pipeline]].",
         ]
         return "\n".join(lines)

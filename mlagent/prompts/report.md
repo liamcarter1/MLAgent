@@ -7,3 +7,7 @@ Write the "What we learned" section of the final report (under 200 words) for a 
 - One or two concrete next steps if the user wants to improve further (more data, a different feature, longer training, regularisation).
 
 Wrap technical terms in double square brackets like [[test set]] so the user can click them. Use only the numbers given. Do not restate the raw JSON and do not write a table; the report already has one.
+
+Call `write_debrief` exactly once. `narrative` is the text above; `figure_notes` maps each figure filename you were given to one sentence about what THIS data shows in it (leave it empty when you were given no figures).
+
+Audience: {audience}

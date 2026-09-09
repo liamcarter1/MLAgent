@@ -8,12 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
-from sklearn.ensemble import HistGradientBoostingClassifier
 
 TEMPLATE = Path("mlagent/templates/tabular_sklearn").resolve()
-CODE_FILES = ("data.py", "model.py", "train.py")
+CODE_FILES = ("data.py", "model.py", "train.py", "evaluate.py")
 
 
 def install(project, config: dict) -> Path:
@@ -30,8 +28,10 @@ def run(root: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-SMALL = {"epochs": 4, "iters_per_epoch": 3, "learning_rate": 0.2, "seed": 1,
-         "early_stopping_patience": 0}
+SMALL = {"model_type": "gradient_boosting", "epochs": 4, "iters_per_epoch": 3,
+         "learning_rate": 0.2, "seed": 1, "early_stopping_patience": 0,
+         "max_leaf_nodes": 31, "max_depth": None, "min_samples_leaf": 20,
+         "l2_regularization": 0.0}
 
 
 def test_classification_run_writes_metrics_checkpoint_and_eval(clean_project):
@@ -47,26 +47,20 @@ def test_classification_run_writes_metrics_checkpoint_and_eval(clean_project):
     assert metrics["best_val_metric"] == max(e["val_metric"] for e in metrics["epochs"])
     assert metrics["seconds_per_epoch"] > 0
     assert (root / "checkpoints" / "best.joblib").exists()
-    ev = json.loads((root / "eval_val.json").read_text(encoding="utf-8"))
-    assert ev["split"] == "val" and ev["task_type"] == "tabular_classification"
-    assert len(ev["y_true"]) == len(ev["y_pred"]) == len(ev["y_proba"]) == metrics["n_val"]
-    assert len(ev["y_proba"][0]) == 2
     assert "epoch 4/4" in proc.stdout
+    assert metrics["started_at"] and metrics["started_at"].endswith("+00:00")
+    assert metrics["model_type"] == "gradient_boosting"
+    assert (root / "plots" / "training_curves.png").exists()
+    assert not (root / "eval_val.json").exists()
     assert not (root / "eval_test.json").exists()
 
 
-def test_regression_run_and_eval_test(regression_project):
+def test_regression_run(regression_project):
     root = install(regression_project, SMALL)
     assert run(root).returncode == 0
     metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["metric"] == "rmse" and metrics["higher_is_better"] is False
     assert metrics["best_val_metric"] == min(e["val_metric"] for e in metrics["epochs"])
-    proc = run(root, "--eval-test")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    ev = json.loads((root / "eval_test.json").read_text(encoding="utf-8"))
-    assert ev["split"] == "test" and ev["y_proba"] is None
-    assert len(ev["y_true"]) == metrics["n_test"]
-    assert ev["value"] > 0
 
 
 def test_early_stopping_stops_before_all_epochs(clean_project):
@@ -80,16 +74,41 @@ def test_early_stopping_stops_before_all_epochs(clean_project):
 
 
 def test_dry_run_prints_timing_and_writes_nothing(clean_project):
-    root = install(clean_project, SMALL)  # SMALL has iters_per_epoch: 3
+    root = install(clean_project, SMALL)
     proc = run(root, "--dry-run")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     line = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert line["seconds_per_round"] >= 0 and line["n_train"] > 0
-    assert line["seconds_per_epoch"] >= line["seconds_per_round"]
-    # one dry-run round timed, then scaled by the configured iters_per_epoch (3)
-    assert line["seconds_per_epoch"] == round(line["seconds_per_round"] * 3, 4)
+    assert line["seconds_per_epoch"] >= 0 and line["n_train"] > 0
     assert not (root / "metrics.json").exists()
     assert not (root / "checkpoints" / "best.joblib").exists()
+
+
+@pytest.mark.parametrize("model_type", ["gradient_boosting", "random_forest", "linear"])
+def test_dry_run_works_for_every_family(clean_project, model_type):
+    configs = {
+        "gradient_boosting": SMALL,
+        "random_forest": {"model_type": "random_forest", "epochs": 2, "trees_per_epoch": 5,
+                          "max_depth": 4, "min_samples_leaf": 1, "max_features": 0.8,
+                          "seed": 1, "early_stopping_patience": 0},
+        "linear": {"model_type": "linear", "epochs": 3, "learning_rate": 0.05,
+                   "alpha": 0.0001, "seed": 1, "early_stopping_patience": 0},
+    }
+    root = install(clean_project, configs[model_type])
+    proc = run(root, "--dry-run")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    line = json.loads(proc.stdout.strip().splitlines()[-1])
+    # rounded to 4 dp: a sub-100 microsecond epoch can legitimately round to 0.0
+    assert line["seconds_per_epoch"] >= 0
+    assert line["n_train"] > 0
+    assert not (root / "metrics.json").exists()
+
+
+def test_linear_run_config_has_no_iters_per_epoch_key(clean_project):
+    root = install(clean_project, {"model_type": "linear", "epochs": 2, "learning_rate": 0.05,
+                                   "alpha": 0.0001, "seed": 1, "early_stopping_patience": 0})
+    assert run(root).returncode == 0
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert "iters_per_epoch" not in metrics["config"]
 
 
 def test_failure_is_recorded_in_metrics(clean_project):
@@ -107,33 +126,6 @@ def test_failure_is_recorded_in_metrics(clean_project):
         "seconds_per_epoch"
     }
     assert set(metrics) >= required_keys
-
-
-def test_eval_test_without_checkpoint_fails_clearly(clean_project):
-    root = install(clean_project, SMALL)
-    proc = run(root, "--eval-test")
-    assert proc.returncode == 1
-    assert "checkpoint" in (proc.stdout + proc.stderr).lower()
-
-
-def test_eval_test_with_explicit_checkpoint(regression_project):
-    root = install(regression_project, SMALL)
-    assert run(root).returncode == 0
-    # Copy the checkpoint under a different name and point --eval-test at it explicitly.
-    src = root / "checkpoints" / "best.joblib"
-    dst = root / "checkpoints" / "run1.joblib"
-    shutil.copy2(src, dst)
-    proc = run(root, "--eval-test", "--checkpoint", "checkpoints/run1.joblib")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert (root / "eval_test.json").exists()
-
-
-def test_eval_test_with_missing_explicit_checkpoint_names_it(clean_project):
-    root = install(clean_project, SMALL)
-    proc = run(root, "--eval-test", "--checkpoint", "checkpoints/does_not_exist.joblib")
-    assert proc.returncode == 1
-    combined = (proc.stdout + proc.stderr)
-    assert "does_not_exist.joblib" in combined
 
 
 def test_failed_run_does_not_inherit_previous_run_metrics(clean_project):
@@ -158,6 +150,24 @@ def test_failed_run_does_not_inherit_previous_run_metrics(clean_project):
     assert metrics["epochs"] == []
 
 
+def test_each_run_gets_a_new_started_at(clean_project):
+    root = install(clean_project, SMALL)
+    assert run(root).returncode == 0
+    first = json.loads((root / "metrics.json").read_text(encoding="utf-8"))["started_at"]
+    assert run(root).returncode == 0
+    second = json.loads((root / "metrics.json").read_text(encoding="utf-8"))["started_at"]
+    assert first and second and first != second
+
+
+def test_train_script_shape(clean_project):
+    root = install(clean_project, SMALL)
+    source = (root / "train.py").read_text(encoding="utf-8")
+    assert "--eval-test" not in source
+    assert "def cli_argv()" in source
+    assert "sys.exit(0)" not in source
+    assert "# --- settings ---" in source
+
+
 def load_train_module():
     """Import train.py as a standalone module (it is not a package member)."""
     template_dir = Path("mlagent/templates/tabular_sklearn").resolve()
@@ -171,22 +181,23 @@ def load_train_module():
         sys.path.pop(0)
 
 
-def test_full_proba_handles_class_absent_from_training():
+def test_cli_argv_ignores_kernel_launchers_but_parses_run_and_script_argv(monkeypatch):
     train_module = load_train_module()
-    X = np.random.default_rng(0).random((20, 2))
-    y = np.array([0, 1] * 10)
-    model = HistGradientBoostingClassifier(max_iter=2, random_state=0)
-    model.fit(X, y)
 
-    result = train_module.evaluate(
-        model, X, y, "tabular_classification", "accuracy", n_classes=3
-    )
+    monkeypatch.setattr(sys, "argv", ["/x/ipykernel_launcher.py", "-f", "k.json"])
+    assert train_module.cli_argv() == []
 
-    assert np.isfinite(result["loss"]), "loss should be finite"
-    y_proba = np.array(result["y_proba"])
-    assert y_proba.shape == (20, 3), "proba should have 20 rows, 3 classes"
-    row_sums = y_proba.sum(axis=1)
-    assert np.allclose(row_sums, 1.0, atol=1e-6), "proba rows should sum to 1"
+    monkeypatch.setattr(sys, "argv", ["/x/colab_kernel_launcher.py", "-f", "k.json"])
+    assert train_module.cli_argv() == []
+
+    monkeypatch.setattr(sys, "argv", ["train.py", "--dry-run"])
+    assert train_module.cli_argv() == ["--dry-run"]
+
+    monkeypatch.setattr(sys, "argv", ["/some/dir/train.py", "--dry-run"])
+    assert train_module.cli_argv() == ["--dry-run"]
+
+    monkeypatch.setattr(sys, "argv", ["train.py"])
+    assert train_module.cli_argv() == []
 
 
 def test_write_json_retries_on_permission_error(tmp_path, monkeypatch):

@@ -5,15 +5,23 @@ from __future__ import annotations
 import json
 import math
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
-CODE_FILES = ("data.py", "model.py", "train.py")
+CODE_FILES = ("data.py", "model.py", "train.py", "evaluate.py")
 SCHEMA_FILE = "config_schema.json"
 TEMPLATE_FOR_TASK = {
     "tabular_classification": "tabular_sklearn",
     "tabular_regression": "tabular_sklearn",
 }
+
+COMMON_DIRNAME = "common"
+COMMON_DIR = TEMPLATES_DIR / COMMON_DIRNAME
+# Scripts copied verbatim into a project via copy_common(). `clean.py` also lives under
+# COMMON_DIR but is never copied as-is: cleaning.render_clean_py() reads it and
+# substitutes the approved steps into its STEPS_JSON line before writing it out.
+COMMON_FILES = ("profile.py",)
 
 
 def template_dir(name: str) -> Path:
@@ -27,6 +35,24 @@ def load_schema(name: str) -> dict:
     return json.loads((template_dir(name) / SCHEMA_FILE).read_text(encoding="utf-8"))
 
 
+def model_types(schema: dict) -> list[str]:
+    return list((schema.get("models") or {}).keys())
+
+
+def schema_for(schema: dict, model_type: str) -> dict:
+    """The flat rules for one model family: the common keys plus that family's keys.
+
+    Everything downstream — `default_config`, `validate_config`, `coerce_config`, the
+    codegen proposal and Milestone 5's tuner — works on this flat form.
+    """
+    models = schema.get("models") or {}
+    if model_type not in models:
+        raise ValueError(
+            f"unknown model_type {model_type!r}; expected one of {sorted(models)}"
+        )
+    return {**(schema.get("common") or {}), **models[model_type]}
+
+
 def default_config(schema: dict) -> dict:
     return {key: rule.get("default") for key, rule in schema.items()}
 
@@ -34,6 +60,13 @@ def default_config(schema: dict) -> dict:
 def _check_value(key: str, value, rule: dict) -> str | None:
     if value is None:
         return None if rule.get("nullable") else f"{key}: must not be null"
+    if rule.get("type") == "choice":
+        choices = list(rule.get("choices") or [])
+        if not isinstance(value, str):
+            return f"{key}: expected one of {choices}, got {value!r}"
+        if value not in choices:
+            return f"{key}: {value!r} is not one of {choices}"
+        return None
     if isinstance(value, bool):
         return f"{key}: expected a number, got a boolean"
     if rule.get("type") == "integer":
@@ -90,6 +123,15 @@ def coerce_config(proposal: dict, schema: dict) -> tuple[dict, list[str]]:
             notes.append(f"Ignored unknown key {key!r}.")
             continue
         rule = schema[key]
+        if rule.get("type") == "choice":
+            choices = list(rule.get("choices") or [])
+            if isinstance(value, str) and value in choices:
+                config[key] = value
+            else:
+                notes.append(
+                    f"Ignored {key}={value!r}: not one of {choices}; kept {config[key]!r}."
+                )
+            continue
         try:
             cast = _cast(value, rule)
         except (TypeError, ValueError):
@@ -119,5 +161,24 @@ def copy_template(name: str, project_root: Path) -> list[Path]:
     for filename in CODE_FILES:
         target = Path(project_root) / filename
         shutil.copyfile(src / filename, target)
+        written.append(target)
+    return written
+
+
+def common_file(name: str) -> Path:
+    """Path to a shared template script (`profile.py`, `clean.py`)."""
+    path = COMMON_DIR / name
+    if not path.is_file():
+        raise FileNotFoundError(f"no common template named {name!r} under {COMMON_DIR}")
+    return path
+
+
+def copy_common(names: Sequence[str], project_root: Path) -> list[Path]:
+    """Copy shared scripts into the project folder, overwriting; return the paths."""
+    written: list[Path] = []
+    for filename in names:
+        target = Path(project_root) / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(common_file(filename), target)
         written.append(target)
     return written

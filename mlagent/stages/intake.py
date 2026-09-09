@@ -6,8 +6,16 @@ import json
 
 from mlagent import config
 from mlagent.llm import LLMError, ToolSpec
-from mlagent.prompts_io import load_prompt
-from mlagent.spec import DATA_SOURCES, GPU_CHOICES, METRICS_FOR_TASK, TASK_TYPES, Spec, SpecError
+from mlagent.prompts_io import audience, load_prompt
+from mlagent.spec import (
+    DATA_SOURCES,
+    GPU_CHOICES,
+    LEARNING_LEVELS,
+    METRICS_FOR_TASK,
+    TASK_TYPES,
+    Spec,
+    SpecError,
+)
 from mlagent.stages.base import StageContext
 from mlagent.ui.questions import Questioner
 
@@ -26,6 +34,11 @@ GPU_LABELS = {
     "T4 GPU": "T4",
     "Any available GPU": "any",
 }
+LEVEL_LABELS = {
+    "Beginner - explain everything as we go": "beginner",
+    "Intermediate - explain the key ideas": "intermediate",
+    "Expert - just the numbers": "expert",
+}
 
 
 def _label_to_code(answer: str, mapping: dict[str, str], allowed: tuple[str, ...]) -> str:
@@ -37,25 +50,42 @@ def _label_to_code(answer: str, mapping: dict[str, str], allowed: tuple[str, ...
 
 
 def collect_draft(q: Questioner) -> dict:
-    goal = q.text("In one or two sentences, what do you want the model to do?")
+    goal = q.text(
+        "In one or two sentences, what do you want the model to do?", key="intake.goal"
+    )
+    learning_level = _label_to_code(
+        q.choice(
+            "How much explanation do you want as we go?",
+            list(LEVEL_LABELS),
+            allow_other=False,
+            key="intake.learning_level",
+        ),
+        LEVEL_LABELS, LEARNING_LEVELS,
+    )
     task_type = _label_to_code(
-        q.choice("What kind of task is it?", list(TASK_LABELS), allow_other=False),
+        q.choice("What kind of task is it?", list(TASK_LABELS), allow_other=False,
+                 key="intake.task_type"),
         TASK_LABELS, TASK_TYPES,
     )
     metric = q.choice("Which metric defines success?", METRICS_FOR_TASK[task_type],
-                      allow_other=False)
-    target_value = q.number(f"What {metric} value would count as good enough?", default=0.9)
+                      allow_other=False, key="intake.metric")
+    target_value = q.number(f"What {metric} value would count as good enough?", default=0.9,
+                            key="intake.target_value")
     data_source = _label_to_code(
-        q.choice("Where will the data come from?", list(SOURCE_LABELS), allow_other=False),
+        q.choice("Where will the data come from?", list(SOURCE_LABELS), allow_other=False,
+                 key="intake.data_source"),
         SOURCE_LABELS, DATA_SOURCES,
     )
     minutes = int(q.number("Roughly how many minutes per training run are acceptable?",
-                           default=10, minimum=1))
-    rounds = int(q.number("How many tuning rounds at most?", default=5, minimum=1))
-    gpu = _label_to_code(q.choice("GPU preference?", list(GPU_LABELS), allow_other=False),
+                           default=10, minimum=1, key="intake.minutes_per_run"))
+    rounds = int(q.number("How many tuning rounds at most?", default=5, minimum=1,
+                          key="intake.max_rounds"))
+    gpu = _label_to_code(q.choice("GPU preference?", list(GPU_LABELS), allow_other=False,
+                                  key="intake.gpu"),
                          GPU_LABELS, GPU_CHOICES)
     return {
         "goal": goal,
+        "learning_level": learning_level,
         "task_type": task_type,
         "metric": metric,
         "target_value": target_value,
@@ -78,6 +108,7 @@ SPEC_SCHEMA = {
         "minutes_per_run": {"type": "integer"},
         "max_rounds": {"type": "integer"},
         "gpu": {"type": "string", "enum": list(GPU_CHOICES)},
+        "learning_level": {"type": "string", "enum": list(LEARNING_LEVELS)},
         "notes": {"type": "string"},
     },
     "required": ["goal", "task_type", "metric", "target_value", "data_source",
@@ -98,7 +129,7 @@ class IntakeStage:
         except (SpecError, TypeError, ValueError):
             return False
 
-    def run(self, ctx: StageContext) -> None:
+    def prepare(self, ctx: StageContext) -> None:
         draft = collect_draft(ctx.questioner)
         ctx.project.write_json("draft_spec.json", draft)
         written: dict = {}
@@ -114,6 +145,8 @@ class IntakeStage:
             return ctx.questioner.text(inp["question"])
 
         def write_spec(inp: dict) -> str:
+            if not str(inp.get("learning_level") or "").strip():
+                inp = {**inp, "learning_level": draft["learning_level"]}
             try:
                 spec = Spec.from_dict(inp)
             except SpecError as exc:
@@ -150,7 +183,7 @@ class IntakeStage:
         result = None
         try:
             result = ctx.llm.run(
-                system=load_prompt("intake"),
+                system=load_prompt("intake", audience=audience(draft["learning_level"])),
                 messages=[{"role": "user", "content": prompt}],
                 tools=tools,
             )
@@ -167,3 +200,7 @@ class IntakeStage:
                 ctx.display(result.text)
             else:
                 ctx.display("Spec saved. Next: obtaining the [[training data]].")
+
+    def debrief(self, ctx: StageContext) -> None:
+        """Intake needs no cells from the user; everything happened in prepare."""
+        return None

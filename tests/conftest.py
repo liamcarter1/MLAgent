@@ -89,3 +89,40 @@ def clean_project(project: Project) -> Project:
 @pytest.fixture
 def regression_project(project: Project) -> Project:
     return write_clean_project(project, "tabular_regression")
+
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+
+def run_handoff(project, handoff) -> None:
+    """Run every cell of a handoff the way the user would, from the project folder."""
+    for command in handoff.commands:
+        result = subprocess.run(
+            [sys.executable, *command],
+            cwd=str(project.root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=300,
+        )
+        assert result.returncode == 0, (
+            f"{' '.join(command)} failed:\n{result.stdout}\n{result.stderr}"
+        )
+
+
+@pytest.fixture
+def advance():
+    """Drive an orchestrator to a standstill, running each handoff's cells in between."""
+
+    def _advance(orch, project, answers=None, limit=12) -> list[str]:
+        ran: list[str] = []
+        for _ in range(limit):
+            ran += orch.run(answers=answers)
+            handoff = orch.waiting()
+            if handoff is None:
+                return ran
+            run_handoff(project, handoff)
+        raise AssertionError(f"pipeline did not settle after {limit} rounds")
+
+    return _advance

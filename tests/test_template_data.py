@@ -82,20 +82,3 @@ def test_validate_rejects_overlap_and_single_class():
            "y_train": np.array([0, 0]), "classes": ["0", "1"]}
     with pytest.raises(ValueError):
         data.validate(bad)
-
-
-def test_build_model_and_grow(clean_project):
-    data = load_module("data")
-    model = load_module("model")
-    out = data.load_data(clean_project.root, {"seed": 1})
-    est = model.build_model({"learning_rate": 0.2, "iters_per_epoch": 3, "seed": 1},
-                            "tabular_classification", out["categorical_mask"])
-    est.fit(out["X_train"], out["y_train"])
-    assert est.n_iter_ == 3
-    model.grow(est, 2)
-    est.fit(out["X_train"], out["y_train"])
-    assert est.n_iter_ == 5
-    reg = model.build_model({}, "tabular_regression", [False] * 6)
-    assert type(reg).__name__ == "HistGradientBoostingRegressor"
-    with pytest.raises(ValueError):
-        model.build_model({}, "image_classification", [])
