@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from mlagent import config as cfg
-from mlagent.runlog import append_run, read_runs
+from mlagent.runlog import read_runs
+from mlagent.runs import EVAL_VAL_FILE, log_finished_run, run_problem
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.templates_io import CODE_FILES
 
-EVAL_VAL_FILE = "eval_val.json"
-CURVES_FIGURE = "training_curves.png"
-BEST_CHECKPOINT = "best.joblib"
+__all__ = ["EVAL_VAL_FILE", "TrainStage"]
 
 
 def _fmt(value) -> str:
@@ -21,45 +19,6 @@ def _fmt(value) -> str:
     if isinstance(value, float):
         return f"{value:.4g}"
     return str(value)
-
-
-def build_run_entry(metrics: dict, checkpoint: str | None = None) -> dict:
-    """One `runs.jsonl` line, entirely derived from the metrics.json that train.py wrote."""
-    epochs = metrics.get("epochs") or []
-    last = epochs[-1] if epochs else {}
-    ok = metrics.get("status") == "done"
-    return {
-        "started_at": metrics.get("started_at"),
-        "status": "done" if ok else "failed",
-        "config": dict(metrics.get("config") or {}),
-        "epochs_run": len(epochs),
-        "best_epoch": metrics.get("best_epoch"),
-        "best_val_metric": metrics.get("best_val_metric"),
-        "final_train_loss": last.get("train_loss"),
-        "final_val_loss": last.get("val_loss"),
-        "seconds": metrics.get("seconds"),
-        "error": metrics.get("error"),
-        "applied_diff": None,
-        "checkpoint": checkpoint if ok else None,
-    }
-
-
-def archive_run(project, run_id: int) -> list[Path]:
-    """Freeze this run's outputs under `run{N}` names so later runs cannot overwrite them."""
-    archived: list[Path] = []
-    curves = project.plots_dir / CURVES_FIGURE
-    if curves.exists():
-        target = project.plots_dir / f"run{run_id}_training.png"
-        shutil.copy2(curves, target)
-        archived.append(target)
-    for source in sorted(project.plots_dir.glob("val_*.png")):
-        target = project.plots_dir / f"run{run_id}_{source.name}"
-        shutil.copy2(source, target)
-        archived.append(target)
-    best = project.checkpoints_dir / BEST_CHECKPOINT
-    if best.exists():
-        shutil.copy2(best, project.checkpoints_dir / f"run{run_id}.joblib")
-    return archived
 
 
 class TrainStage(ScriptStageBase):
@@ -102,44 +61,14 @@ class TrainStage(ScriptStageBase):
 
     def debrief(self, ctx: StageContext) -> None:
         project = ctx.project
-        metrics = project.read_json(cfg.METRICS_FILE)
-        if not isinstance(metrics, dict) or not metrics.get("started_at"):
-            ctx.display(
-                "I can't see a finished run in `metrics.json` yet. Run the `train.py` cell, "
-                "then run this cell again."
-            )
+        problem = run_problem(project)
+        if problem:
+            ctx.display(problem)
             return
-        runs = read_runs(project.runs_path)
-        entry = next(
-            (r for r in runs if r.get("started_at") == metrics["started_at"]), None
-        )
-        if entry is None:
-            ok = metrics.get("status") == "done"
-            if ok:
-                eval_data = project.read_json(EVAL_VAL_FILE)
-                if (
-                    not isinstance(eval_data, dict)
-                    or eval_data.get("started_at") != metrics["started_at"]
-                ):
-                    ctx.display(
-                        "The `train.py` run finished, but `eval_val.json` doesn't match it "
-                        "yet. Run the `evaluate.py` cell, then run this cell again."
-                    )
-                    return
-            run_id = len(runs) + 1
-            figures = archive_run(project, run_id) if ok else []
-            checkpoint = (
-                f"checkpoints/run{run_id}.joblib"
-                if ok and (project.checkpoints_dir / f"run{run_id}.joblib").exists()
-                else None
-            )
-            entry = append_run(project.runs_path, build_run_entry(metrics, checkpoint))
-        else:
-            figures = sorted(
-                project.plots_dir.glob(f"run{entry['run_id']}_*.png"),
-                key=lambda p: (not p.name.endswith("_training.png"), p.name),
-            )
-
+        logged = log_finished_run(project)
+        if logged is None:
+            return
+        entry = logged.entry
         run_id = entry["run_id"]
         if entry["status"] != "done":
             ctx.display(
@@ -149,8 +78,9 @@ class TrainStage(ScriptStageBase):
             return
 
         spec = ctx.spec()
+        metrics = project.read_json(cfg.METRICS_FILE) or {}
         eval_data = project.read_json(EVAL_VAL_FILE) or {}
-        ctx.display(self._narrative(ctx, spec, entry, metrics, eval_data, figures))
+        ctx.display(self._narrative(ctx, spec, entry, metrics, eval_data, logged.figures))
 
     def _narrative(self, ctx: StageContext, spec, entry: dict, metrics: dict,
                    eval_data: dict, figures: list[Path]) -> str:

@@ -7,9 +7,10 @@ from pathlib import Path
 
 from mlagent import runlog
 from mlagent.llm import FakeLLM
+from mlagent.runs import archive_run, build_run_entry
 from mlagent.stages.base import Handoff, StageContext
 from mlagent.stages.codegen import CodegenStage
-from mlagent.stages.train import EVAL_VAL_FILE, TrainStage, archive_run, build_run_entry
+from mlagent.stages.train import EVAL_VAL_FILE, TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
 
 SMALL = {"epochs": 3, "iters_per_epoch": 3, "early_stopping_patience": 0}
@@ -76,6 +77,7 @@ def test_real_training_run_is_logged_archived_and_debriefed(clean_project):
     assert runs[0]["checkpoint"] == "checkpoints/run1.joblib"
     assert runs[0]["started_at"]
     assert (project.checkpoints_dir / "run1.joblib").exists()
+    assert project.read_json("runs/run1_metrics.json")["started_at"] == runs[0]["started_at"]
     names = sorted(p.name for p in project.plots_dir.glob("run1_*.png"))
     assert names == ["run1_training.png", "run1_val_confusion.png",
                      "run1_val_per_class.png", "run1_val_roc_pr.png"]

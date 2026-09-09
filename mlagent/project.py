@@ -98,8 +98,14 @@ class Project:
     def checkpoints_dir(self) -> Path:
         return self.root / "checkpoints"
 
+    @property
+    def runs_dir(self) -> Path:
+        """Per-run archives (`run{N}_metrics.json`); runs.jsonl itself is `runs_path`."""
+        return self.root / config.RUNS_DIRNAME
+
     def ensure_dirs(self) -> None:
-        for d in (self.root, self.data_raw, self.data_clean, self.plots_dir, self.checkpoints_dir):
+        for d in (self.root, self.data_raw, self.data_clean, self.plots_dir,
+                  self.checkpoints_dir, self.runs_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def exists(self, filename: str) -> bool:

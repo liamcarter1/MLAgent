@@ -58,3 +58,11 @@ def test_write_json_file_atomic_roundtrip(tmp_path: Path):
     path = tmp_path / "sub" / "data.json"
     write_json_file(path, {"x": 1})
     assert json.loads(path.read_text(encoding="utf-8")) == {"x": 1}
+
+
+def test_ensure_dirs_creates_the_runs_archive_dir(tmp_path):
+    from mlagent.project import Project
+
+    p = Project(tmp_path / "proj")
+    p.ensure_dirs()
+    assert p.runs_dir == tmp_path / "proj" / "runs" and p.runs_dir.is_dir()
