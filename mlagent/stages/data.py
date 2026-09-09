@@ -20,6 +20,25 @@ PROFILE_RAW_FILE = "profile_raw.json"
 DEFAULT_QUIRKS = ("missing", "duplicates", "id_column", "categorical", "whitespace", "outliers")
 DEFAULT_SEARCH_ROOTS = (Path("/content/drive/MyDrive"), Path("/content"))
 TABULAR_TASKS = {"tabular_classification": "classification", "tabular_regression": "regression"}
+# Preference order: an exact or suffix match on an earlier keyword beats a later one.
+TARGET_GUESS_KEYWORDS = (
+    "target", "label", "class", "y", "outcome", "result", "churn", "price", "score",
+)
+
+
+def guess_target(df: pd.DataFrame) -> str | None:
+    """The column most likely to be the target: the first column (by keyword preference
+    order) whose lowercased name is one of `TARGET_GUESS_KEYWORDS` or ends with one, else
+    the last column. `None` only for a frame with no columns."""
+    columns = [str(c) for c in df.columns]
+    if not columns:
+        return None
+    for keyword in TARGET_GUESS_KEYWORDS:
+        for col in columns:
+            lower = col.lower()
+            if lower == keyword or lower.endswith(keyword):
+                return col
+    return columns[-1]
 
 
 class DataStage(ScriptStageBase):
@@ -130,9 +149,15 @@ class DataStage(ScriptStageBase):
 
     def _ask_target(self, ctx: StageContext, df: pd.DataFrame) -> str:
         cols = [str(c) for c in df.columns]
+        guess = guess_target(df)
+        if guess is not None:
+            ctx.display(
+                f"My guess is `{guess}` (it looks like a label column); pick a different "
+                "one if I am wrong."
+            )
         return ctx.questioner.choice(
             "Which column is the target (what you want to predict)?", cols, allow_other=False,
-            key="data.target_column",
+            key="data.target_column", default=guess,
         )
 
     def _drive(self, ctx: StageContext):

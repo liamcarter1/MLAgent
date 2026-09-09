@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from mlagent import captions
+
 TEMPLATE = Path("mlagent/templates/tabular_sklearn").resolve()
 CODE_FILES = ("data.py", "model.py", "train.py", "evaluate.py")
 SMALL = {"model_type": "gradient_boosting", "epochs": 3, "iters_per_epoch": 3,
@@ -135,6 +137,12 @@ def test_full_proba_handles_a_class_absent_from_training():
     assert proba.shape == (4, 3)
     assert np.allclose(proba.sum(axis=1), 1.0)
     assert proba[0, 1] < 1e-6
+
+
+def test_template_captions_match_mlagent_captions():
+    module = load_evaluate_module()
+    kinds = ["confusion", "roc_pr", "per_class", "pred_vs_actual", "residuals"]
+    assert module.CAPTIONS == {k: captions.CAPTIONS[k] for k in kinds}
 
 
 def test_evaluate_script_shape(clean_project):
