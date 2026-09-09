@@ -37,6 +37,17 @@ MAX_PLOTTED_COLS = 60
 STEPS_JSON = r"""[]"""
 STEPS: list[dict] = json.loads(STEPS_JSON)
 
+# --- captions ---
+# Byte-identical to the matching entry in mlagent/captions.py (tests/test_template_clean.py
+# checks this); kept here too since this script never depends on the mlagent package.
+CAPTIONS = {
+    "clean_before_after_missing": (
+        "The percentage of missing values per column before and after cleaning. Bars that "
+        "shrink to zero were filled or dropped; bars that did not move were left alone on "
+        "purpose."
+    ),
+}
+
 # --- palette ---
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 INK, INK_2, MUTED, GRID, AXIS, SURFACE = (
@@ -200,20 +211,25 @@ def before_after_missing(before: dict, after: dict):
     return fig
 
 
-def show(fig) -> None:
+def show(fig, kind: str) -> None:
+    """Display in a notebook if one is running, then print how to read the figure."""
     try:
         from IPython import get_ipython
         from IPython.display import display
     except ImportError:
-        return
-    if get_ipython() is not None:
-        display(fig)
+        pass
+    else:
+        if get_ipython() is not None:
+            display(fig)
+    caption = CAPTIONS.get(kind, "")
+    if caption:
+        print("How to read this: " + caption.replace("[[", "").replace("]]", ""))
 
 
-def save(fig, plots_dir: Path, name: str) -> str:
+def save(fig, plots_dir: Path, name: str, kind: str) -> str:
     plots_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(plots_dir / f"{name}.png", dpi=110, bbox_inches="tight", facecolor=SURFACE)
-    show(fig)
+    show(fig, kind)
     plt.close(fig)
     return f"{name}.png"
 
@@ -254,7 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     cleaned.to_csv(out_path, index=False)
 
     before, after = summarise(raw), summarise(cleaned)
-    figures = [save(before_after_missing(before, after), project_dir / "plots", FIGURE_NAME)]
+    figures = [
+        save(before_after_missing(before, after), project_dir / "plots", FIGURE_NAME,
+             "clean_before_after_missing")
+    ]
     (project_dir / PROFILE_FILE).write_text(
         json.dumps(
             {"before": before, "after": after, "steps": STEPS, "figures": figures},

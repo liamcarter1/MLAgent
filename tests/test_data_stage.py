@@ -6,7 +6,7 @@ import pytest
 from mlagent.datasources.hf import HFDataset
 from mlagent.llm import FakeLLM
 from mlagent.stages.base import Handoff, StageContext
-from mlagent.stages.data import META_FILE, PROFILE_RAW_FILE, RAW_FILE, DataStage
+from mlagent.stages.data import META_FILE, PROFILE_RAW_FILE, RAW_FILE, DataStage, guess_target
 from mlagent.templates_io import COMMON_FILES
 from mlagent.ui.questions import ScriptedQuestioner
 
@@ -38,6 +38,30 @@ def run_profile_script(project):
         capture_output=True, text=True, encoding="utf-8",
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_guess_target_matches_a_named_column():
+    df = pd.DataFrame({"age": [1], "income": [2], "target": [0]})
+    assert guess_target(df) == "target"
+
+
+def test_guess_target_matches_a_keyword_suffix():
+    df = pd.DataFrame({"age": [1], "customer_churn": [0]})
+    assert guess_target(df) == "customer_churn"
+
+
+def test_guess_target_prefers_an_earlier_keyword():
+    df = pd.DataFrame({"class": [1], "label": [0]})
+    assert guess_target(df) == "label"
+
+
+def test_guess_target_falls_back_to_the_last_column():
+    df = pd.DataFrame({"age": [1], "income": [2], "notes": [3]})
+    assert guess_target(df) == "notes"
+
+
+def test_guess_target_none_for_an_empty_frame():
+    assert guess_target(pd.DataFrame()) is None
 
 
 def test_synthetic_classification_prepares_then_debriefs(project):
@@ -89,7 +113,7 @@ def test_drive_source_lists_files_and_asks_target(project, tmp_path):
     root.mkdir()
     csv = root / "customers.csv"
     csv.write_text("age,income,churned\n30,100,0\n40,200,1\n50,300,0\n", encoding="utf-8")
-    ctx, _shown, _figures = make_ctx(project, [str(csv), "churned"], source="drive")
+    ctx, shown, _figures = make_ctx(project, [str(csv), "churned"], source="drive")
     DataStage(search_roots=[root]).prepare(ctx)
     meta = project.read_json(META_FILE)
     assert meta == {
@@ -97,6 +121,7 @@ def test_drive_source_lists_files_and_asks_target(project, tmp_path):
         "raw_n_rows": 3,
     }
     assert "Which column is the target" in ctx.questioner.asked[-1]
+    assert any("My guess is `churned`" in s for s in shown)
 
 
 def test_drive_source_missing_file_raises(project, tmp_path):
@@ -124,6 +149,31 @@ def test_huggingface_source_searches_picks_and_loads(project):
     assert searches == ["nothing", "churn"]
     assert project.read_json(META_FILE)["hf_id"] == "org/churn"
     assert any("No datasets found" in s for s in shown)
+
+
+def test_huggingface_blank_query_form_value_asks_instead_of_searching_empty(project):
+    """A blank `data.hf_query` form value must ask (Task 4): the query question has no
+    default, so a blank value is not silently accepted as an empty search."""
+    from mlagent.ui.questions import FormQuestioner
+
+    searches: list[str] = []
+
+    def fake_search(query, limit=8):
+        searches.append(query)
+        return [HFDataset("org/churn", 10, 1, "customer churn")]
+
+    def fake_load(dataset_id):
+        return pd.DataFrame({"a": [1, 2, 3], "y": [0, 1, 0]})
+
+    ctx, _shown, _figures = make_ctx(
+        project, ["churn", "org/churn — 10 downloads — customer churn", "y"],
+        source="huggingface",
+    )
+    fallback = ctx.questioner
+    ctx.questioner = FormQuestioner({"data.hf_query": ""}, fallback=fallback)
+    DataStage(hf_search=fake_search, hf_load=fake_load).prepare(ctx)
+    assert searches == ["churn"]
+    assert project.read_json(META_FILE)["hf_id"] == "org/churn"
 
 
 def test_image_task_is_not_supported_yet(project):

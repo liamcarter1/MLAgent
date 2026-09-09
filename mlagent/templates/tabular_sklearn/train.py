@@ -43,6 +43,17 @@ METRICS_FILE = "metrics.json"
 CHECKPOINT = Path("checkpoints") / "best.joblib"
 CURVES_FIGURE = Path("plots") / "training_curves.png"
 
+# --- captions ---
+# Byte-identical to the matching entry in mlagent/captions.py (tests/test_template_train.py
+# checks this); kept here too since this script never depends on the mlagent package.
+CAPTIONS = {
+    "training_curves": (
+        "Left: [[loss]] per [[epoch]] for the training and validation splits. Right: the same "
+        "for your chosen metric. Training loss falling while validation loss rises is "
+        "[[overfitting]]; both flat is a [[plateau]]."
+    ),
+}
+
 
 # --- small helpers ---
 def read_json(path: Path, default=None):
@@ -96,6 +107,7 @@ def empty_metrics() -> dict:
 
 # --- the live training curve ---
 _HANDLE = None
+_CAPTION_PRINTED = False
 
 
 def training_curves(epochs: list[dict], metric: str):
@@ -121,18 +133,22 @@ def training_curves(epochs: list[dict], metric: str):
 
 def redraw(fig) -> None:
     """Update one output area in place, so the curve animates instead of stacking up."""
-    global _HANDLE
+    global _HANDLE, _CAPTION_PRINTED
     try:
         from IPython import get_ipython
         from IPython.display import display
     except ImportError:
-        return
-    if get_ipython() is None:
-        return
-    if _HANDLE is None:
-        _HANDLE = display(fig, display_id=True)
+        pass
     else:
-        _HANDLE.update(fig)
+        if get_ipython() is not None:
+            if _HANDLE is None:
+                _HANDLE = display(fig, display_id=True)
+            else:
+                _HANDLE.update(fig)
+    if not _CAPTION_PRINTED:
+        _CAPTION_PRINTED = True
+        caption = CAPTIONS.get("training_curves", "")
+        print("How to read this: " + caption.replace("[[", "").replace("]]", ""))
 
 
 def draw_curves(project_dir: Path, epochs: list[dict], metric: str) -> None:

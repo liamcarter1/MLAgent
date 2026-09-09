@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from mlagent import captions
+
 TEMPLATE = Path("mlagent/templates/tabular_sklearn").resolve()
 CODE_FILES = ("data.py", "model.py", "train.py", "evaluate.py")
 
@@ -157,6 +159,11 @@ def test_each_run_gets_a_new_started_at(clean_project):
     assert run(root).returncode == 0
     second = json.loads((root / "metrics.json").read_text(encoding="utf-8"))["started_at"]
     assert first and second and first != second
+
+
+def test_template_captions_match_mlagent_captions():
+    train_module = load_train_module()
+    assert train_module.CAPTIONS == {"training_curves": captions.CAPTIONS["training_curves"]}
 
 
 def test_train_script_shape(clean_project):

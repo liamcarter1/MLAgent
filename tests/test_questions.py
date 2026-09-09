@@ -125,6 +125,31 @@ def test_form_text_blank_value_still_falls_back_with_a_note_when_no_default():
     assert q.used == []
 
 
+def test_form_choice_blank_value_falls_back_without_a_note():
+    q, fallback, notes = make_form({"data.target_column": ""}, ["income"])
+    assert q.choice("Target?", ["age", "income"], allow_other=False,
+                    key="data.target_column") == "income"
+    assert fallback.asked == ["Target?"]
+    assert notes == []
+    assert q.used == []
+
+
+def test_form_choice_none_value_falls_back_without_a_note():
+    q, fallback, notes = make_form({"data.drive_path": None}, ["/tmp/data.csv"])
+    assert q.choice("Path?", ["/a.csv"], allow_other=True,
+                    key="data.drive_path") == "/tmp/data.csv"
+    assert fallback.asked == ["Path?"]
+    assert notes == []
+
+
+def test_form_choice_non_blank_invalid_value_still_notes():
+    q, fallback, notes = make_form({"data.target_column": "nope"}, ["income"])
+    assert q.choice("Target?", ["age", "income"], allow_other=False,
+                    key="data.target_column") == "income"
+    assert fallback.asked == ["Target?"]
+    assert len(notes) == 1 and "asking instead" in notes[0]
+
+
 def test_form_choice_allows_other_when_permitted():
     q, _fallback, notes = make_form({"data.hf_query": "credit card fraud"}, [])
     assert q.choice("Dataset?", ["iris", "titanic"], allow_other=True,

@@ -83,10 +83,11 @@ class RecordingQuestioner(ScriptedQuestioner):
         self._watched_question = watched_question
         self.offered_options: list[str] | None = None
 
-    def choice(self, question, options, allow_other=True, key=None):
+    def choice(self, question, options, allow_other=True, key=None, default=None):
         if question == self._watched_question:
             self.offered_options = list(options)
-        return super().choice(question, options, allow_other=allow_other, key=key)
+        return super().choice(question, options, allow_other=allow_other, key=key,
+                              default=default)
 
 
 def test_edit_menu_omits_model_type(clean_project):
