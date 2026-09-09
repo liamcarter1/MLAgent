@@ -67,6 +67,16 @@ CAPTIONS: dict[str, str] = {
         "Right: the same errors against the prediction; a funnel or a curve means the model is "
         "missing structure rather than just being noisy."
     ),
+    "compare_curves": (
+        "One line per training run: validation [[loss]] per [[epoch]], with a dot at each "
+        "run's best epoch. The legend names the change that produced each run. The lowest "
+        "line whose dot sits at its right-hand end still had room to improve."
+    ),
+    "compare_runs": (
+        "One bar per run: the best validation score it reached, with your target as the "
+        "dashed line. A hollow bar is a run that failed. Compare the labels to see which "
+        "change moved the bar, and in which direction."
+    ),
 }
 
 

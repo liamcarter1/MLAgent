@@ -7,7 +7,7 @@ from mlagent.captions import CAPTIONS, caption_for
 EXPECTED_KINDS = {
     "histograms", "missing", "class_balance", "target_distribution", "correlation",
     "clean_before_after_missing", "training_curves", "confusion", "roc_pr", "per_class",
-    "pred_vs_actual", "residuals",
+    "pred_vs_actual", "residuals", "compare_curves", "compare_runs",
 }
 
 
@@ -33,3 +33,8 @@ def test_longest_suffix_wins_and_unknown_returns_empty():
         CAPTIONS["clean_before_after_missing"]
     )
     assert caption_for("plots/something_else.png") == ""
+
+
+def test_comparison_captions_match_by_stem():
+    assert caption_for("plots/compare_curves.png") == CAPTIONS["compare_curves"]
+    assert caption_for("plots/compare_runs.png") == CAPTIONS["compare_runs"]
