@@ -18,7 +18,9 @@ from mlagent.templates_io import (
     CODE_FILES,
     TEMPLATE_FOR_TASK,
     coerce_config,
+    config_table,
     copy_template,
+    edit_config,
     load_schema,
     model_types,
     schema_for,
@@ -118,20 +120,6 @@ def meta_summary(meta: dict) -> dict:
     }
 
 
-def config_table(config: dict, schema: dict) -> str:
-    rows = ["| key | value | what it does |", "|---|---|---|"]
-    for key, value in config.items():
-        desc = schema.get(key, {}).get("description", "")
-        if value is None:
-            shown = "none"
-        elif isinstance(value, float):
-            shown = f"{value:g}"
-        else:
-            shown = str(value)
-        rows.append(f"| {key} | {shown} | {desc} |")
-    return "\n".join(rows)
-
-
 class CodegenStage:
     name = "codegen"
 
@@ -192,7 +180,7 @@ class CodegenStage:
         ctx.display("\n".join(message))
 
         if not ctx.questioner.confirm("Happy with this configuration? (No lets you change values)"):
-            config = self._edit_config(ctx, config, schema)
+            config = edit_config(ctx.questioner, config, schema, ctx.display)
             ctx.project.write_json(cfg.CONFIG_FILE, config)
             ctx.display("Updated configuration:\n\n" + config_table(config, schema))
 
@@ -295,41 +283,3 @@ class CodegenStage:
             return {}, f"Using the template defaults (the assistant was unavailable: {exc})."
         rationale = captured.get("rationale") or result.text or "Using the template defaults."
         return dict(captured.get("config") or {}), rationale
-
-    def _edit_config(self, ctx: StageContext, config: dict, schema: dict) -> dict:
-        config = dict(config)
-        while True:
-            # model_type (and any other "choice" rule) is not a number the questioner can
-            # prompt for; Task 10 owns the model-choice flow, so it is left off this menu.
-            editable = [
-                k for k in config if schema.get(k, {}).get("type") != "choice"
-            ]
-            options = [f"{k} = {config[k]}" for k in editable] + ["Done"]
-            pick = ctx.questioner.choice(
-                "Which value do you want to change?", options, allow_other=False
-            )
-            if pick == "Done":
-                return config
-            key = pick.split(" = ", 1)[0]
-            rule = schema.get(key)
-            if rule is None:
-                continue
-            nullable = bool(rule.get("nullable"))
-            hint = " (0 means no limit)" if nullable else ""
-            current = config.get(key)
-            value = ctx.questioner.number(
-                f"New value for {key}{hint}: {rule.get('description', '')}",
-                default=0 if current is None else current,
-                minimum=0 if nullable else rule.get("min"),
-                maximum=rule.get("max"),
-            )
-            if nullable and value == 0:
-                config[key] = None
-            elif rule.get("type") == "integer":
-                config[key] = int(round(value))
-            else:
-                config[key] = float(value)
-            problems = validate_config(config, schema)
-            if problems:
-                ctx.display("That value is not allowed: " + "; ".join(problems))
-                config[key] = current

@@ -182,3 +182,57 @@ def copy_common(names: Sequence[str], project_root: Path) -> list[Path]:
         shutil.copyfile(common_file(filename), target)
         written.append(target)
     return written
+
+
+def config_table(config: dict, schema: dict) -> str:
+    """Markdown table of a config: key, value, and the schema's one-line description."""
+    rows = ["| key | value | what it does |", "|---|---|---|"]
+    for key, value in config.items():
+        desc = schema.get(key, {}).get("description", "")
+        if value is None:
+            shown = "none"
+        elif isinstance(value, float):
+            shown = f"{value:g}"
+        else:
+            shown = str(value)
+        rows.append(f"| {key} | {shown} | {desc} |")
+    return "\n".join(rows)
+
+
+def edit_config(questioner, config: dict, schema: dict, display=lambda text: None) -> dict:
+    """Let the user change numeric values one at a time until they pick Done.
+
+    Choice-typed keys (`model_type`) are not offered: the questioner can only prompt for
+    numbers, and a family switch is the codegen stage's or the tuner's job. A value the
+    schema rejects is reported through `display` and reverted.
+    """
+    config = dict(config)
+    while True:
+        editable = [k for k in config if schema.get(k, {}).get("type") != "choice"]
+        options = [f"{k} = {config[k]}" for k in editable] + ["Done"]
+        pick = questioner.choice("Which value do you want to change?", options, allow_other=False)
+        if pick == "Done":
+            return config
+        key = pick.split(" = ", 1)[0]
+        rule = schema.get(key)
+        if rule is None:
+            continue
+        nullable = bool(rule.get("nullable"))
+        hint = " (0 means no limit)" if nullable else ""
+        current = config.get(key)
+        value = questioner.number(
+            f"New value for {key}{hint}: {rule.get('description', '')}",
+            default=0 if current is None else current,
+            minimum=0 if nullable else rule.get("min"),
+            maximum=rule.get("max"),
+        )
+        if nullable and value == 0:
+            config[key] = None
+        elif rule.get("type") == "integer":
+            config[key] = int(round(value))
+        else:
+            config[key] = float(value)
+        problems = validate_config(config, schema)
+        if problems:
+            display("That value is not allowed: " + "; ".join(problems))
+            config[key] = current

@@ -121,3 +121,52 @@ def test_choice_rules_validate_and_coerce():
     assert coerced["model_type"] == "gradient_boosting"
     assert coerced["learning_rate"] == 0.05
     assert any("model_type" in n for n in notes)
+
+
+from mlagent.templates_io import (  # noqa: E402
+    config_table,
+    default_config,
+    edit_config,
+    load_schema,
+    schema_for,
+)
+from mlagent.ui.questions import ScriptedQuestioner  # noqa: E402
+
+
+def _gb_config():
+    nested = load_schema("tabular_sklearn")
+    flat = schema_for(nested, "gradient_boosting")
+    config = default_config(flat)
+    config["model_type"] = "gradient_boosting"
+    return config, flat
+
+
+def test_edit_config_changes_one_value_and_stops_at_done():
+    config, flat = _gb_config()
+    q = ScriptedQuestioner(["epochs = 10", "20", "Done"])
+    edited = edit_config(q, config, flat)
+    assert edited["epochs"] == 20 and config["epochs"] == 10  # the input is not mutated
+    assert "model_type" not in " ".join(q.asked)  # choice keys are not on the menu
+
+
+def test_edit_config_reverts_a_value_the_schema_rejects():
+    config, flat = _gb_config()
+    shown: list[str] = []
+    q = ScriptedQuestioner(["learning_rate = 0.1", "5", "Done"])
+    edited = edit_config(q, config, flat, display=shown.append)
+    assert edited["learning_rate"] == 0.1
+    assert any("not allowed" in s for s in shown)
+
+
+def test_edit_config_zero_means_none_for_nullable_keys():
+    config, flat = _gb_config()
+    config["max_depth"] = 4
+    q = ScriptedQuestioner(["max_depth = 4", "0", "Done"])
+    assert edit_config(q, config, flat)["max_depth"] is None
+
+
+def test_config_table_lists_every_key_with_its_description():
+    config, flat = _gb_config()
+    table = config_table(config, flat)
+    assert table.startswith("| key | value | what it does |")
+    assert "| learning_rate | 0.1 |" in table and "| max_depth | none |" in table
