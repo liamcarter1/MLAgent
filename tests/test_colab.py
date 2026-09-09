@@ -139,7 +139,7 @@ def test_every_param_field_has_a_hint_naming_it():
             assert label_match.group(1).lower() == var_name.lower(), (
                 f"hint label {label_match.group(1)!r} does not name field {var_name!r}"
             )
-    assert checked >= 15  # every #@param field across the form cells was checked
+    assert checked == 23  # every #@param field across the four form cells was checked
 
 
 def test_every_form_cell_has_a_purpose_line_after_its_title():

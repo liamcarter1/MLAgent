@@ -13,6 +13,7 @@ class Questioner(Protocol):
         options: list[str],
         allow_other: bool = True,
         key: str | None = None,
+        default: str | None = None,
     ) -> str: ...
     def text(self, prompt: str, default: str | None = None, key: str | None = None) -> str: ...
     def confirm(self, question: str, default: bool = True, key: str | None = None) -> bool: ...
@@ -39,13 +40,17 @@ class ConsoleQuestioner:
         options: list[str],
         allow_other: bool = True,
         key: str | None = None,
+        default: str | None = None,
     ) -> str:
         self._print(question)
         for i, opt in enumerate(options, 1):
             self._print(f"  {i}) {opt}")
         hint = "number or text" + (", or type your own answer" if allow_other else "")
+        suffix = f" [{default}]" if default is not None else ""
         while True:
-            raw = self._input(f"[{hint}] > ").strip()
+            raw = self._input(f"[{hint}]{suffix} > ").strip()
+            if not raw and default is not None:
+                return default
             if raw.isdigit():
                 if 1 <= int(raw) <= len(options):
                     return options[int(raw) - 1]
@@ -123,8 +128,10 @@ class ScriptedQuestioner:
         options: list[str],
         allow_other: bool = True,
         key: str | None = None,
+        default: str | None = None,
     ) -> str:
-        return self._next(question)
+        answer = self._next(question)
+        return answer if answer or default is None else default
 
     def text(self, prompt: str, default: str | None = None, key: str | None = None) -> str:
         answer = self._next(prompt)
@@ -210,6 +217,7 @@ class FormQuestioner:
         options: list[str],
         allow_other: bool = True,
         key: str | None = None,
+        default: str | None = None,
     ) -> str:
         # A blank value falls back silently (below), unlike the other question kinds:
         # a blank target column or Drive path is meant to simply ask, not to look like
@@ -222,7 +230,8 @@ class FormQuestioner:
             if allow_other:
                 return self._accept(key, text)
             self._reject(key, text)
-        return self.fallback.choice(question, options, allow_other=allow_other, key=key)
+        return self.fallback.choice(question, options, allow_other=allow_other, key=key,
+                                    default=default)
 
     def text(self, prompt: str, default: str | None = None, key: str | None = None) -> str:
         if key is not None and key in self.answers:

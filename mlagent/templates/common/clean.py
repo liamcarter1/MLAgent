@@ -212,6 +212,7 @@ def before_after_missing(before: dict, after: dict):
 
 
 def show(fig, kind: str) -> None:
+    """Display in a notebook if one is running, then print how to read the figure."""
     try:
         from IPython import get_ipython
         from IPython.display import display
@@ -221,7 +222,8 @@ def show(fig, kind: str) -> None:
         if get_ipython() is not None:
             display(fig)
     caption = CAPTIONS.get(kind, "")
-    print("How to read this: " + caption.replace("[[", "").replace("]]", ""))
+    if caption:
+        print("How to read this: " + caption.replace("[[", "").replace("]]", ""))
 
 
 def save(fig, plots_dir: Path, name: str, kind: str) -> str:

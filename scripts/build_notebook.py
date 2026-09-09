@@ -26,13 +26,16 @@ cells = [
         "with notebook access on.\n"
         "3. Run the cells in order.\n\n"
         "## How this notebook works\n\n"
-        "The assistant leads you through six steps, each with one form cell you fill in and, "
-        "for some steps, a script cell you run:\n\n"
+        "The assistant leads you through six steps. Steps 1-4 each have a form cell you "
+        "fill in. Step 5 (train) is two script cells you run: `train.py`, then "
+        "`evaluate.py`. Step 6 (report) is a cell you just run. Some steps also hand you a "
+        "script cell to run:\n\n"
         "1. **Interview.** *You do:* answer the form below (project name, goal, task, metric, "
         "data source, budget). *You get:* a saved project specification, `spec.json`.\n"
-        "2. **Data.** *You do:* say where the data comes from. *You get:* a raw dataset and a "
-        "profile with four figures (histograms, missing values, class balance or target "
-        "spread, correlation).\n"
+        "2. **Data.** *You do:* give the path, search keywords, or the size of the "
+        "synthetic dataset (the source itself is chosen in step 1). *You get:* a raw "
+        "dataset and a profile with two to four figures (histograms, missing values, class "
+        "balance or target spread, correlation).\n"
         "3. **Clean.** *You do:* approve or skip each proposed fix. *You get:* a cleaned "
         "dataset, a re-runnable `clean.py`, and the train/validation/test split.\n"
         "4. **Model.** *You do:* pick a model family or let the assistant recommend one. "
@@ -97,7 +100,8 @@ cells = [
         "predictions (fine when classes are balanced); *F1* is better when one class is rare; "
         "*RMSE* and *MAE* are the average size of the error for numbers, lower is better; "
         "*R2* is the fraction of the variation in the number your model explains, 1 is "
-        "perfect. Unsure? Accuracy for classification, RMSE for regression.",
+        "perfect. Unsure? Accuracy for classification, RMSE for regression. Only the "
+        "metrics that fit your TASK are accepted.",
         "METRIC = 'accuracy'  #@param ['accuracy', 'f1', 'rmse', 'mae', 'r2']",
         "#@markdown **TARGET_VALUE** — The metric value you would be happy with. For accuracy "
         "or F1 a fraction like `0.9` (90%). For RMSE or MAE it is in the units of the thing "
@@ -160,14 +164,14 @@ cells = [
         "INJECT_QUIRKS = True  #@param {type:'boolean'}",
         "#@markdown **DRIVE_PATH** — Drive only. The path to your file under MyDrive, e.g. "
         "`MyDrive/data/customers.csv`. Leave blank and the assistant lists the data files it "
-        "can see so you can pick one.",
+        "can see so you can pick one; if it finds none it asks you to type the full path.",
         "DRIVE_PATH = ''  #@param {type:'string'}",
         "#@markdown **HF_QUERY** — HuggingFace only. A few keywords describing the dataset "
         "you want, e.g. `credit card fraud` or `iris`. Leave blank to be asked.",
         "HF_QUERY = ''  #@param {type:'string'}",
-        "#@markdown **TARGET_COLUMN** — The column you want to predict. Leave blank: after "
-        "loading the data the assistant shows your columns and asks you to pick, with its "
-        "best guess marked.",
+        "#@markdown **TARGET_COLUMN** — Drive and HuggingFace only. The column you want to "
+        "predict. Leave blank: after loading the data the assistant shows your columns and "
+        "asks you to pick, with its best guess marked.",
         "TARGET_COLUMN = ''  #@param {type:'string'}",
         "",
         "orch.run(until='data', answers={",
@@ -225,7 +229,7 @@ cells = [
     script_cell("train", 0),
     script_cell("train", 1),
     code(
-        "#@title 5. Report",
+        "#@title 6. Report",
         "# Score the best model once on the test rows it has never seen, then write "
         "report.md. The assistant asks before touching the test set.",
         "orch.run(until='report')",
@@ -258,6 +262,12 @@ cells = [
     ),
     code("# orch.reset('intake'); orch.run()"),
 ]
+
+# nbformat assigns each new cell a random id, which would make every rebuild of an
+# otherwise-unchanged notebook look like a diff. Overwrite with the cell's position so
+# two builds of the same `cells` list are byte-identical.
+for _i, _cell in enumerate(cells):
+    _cell["id"] = f"cell-{_i:02d}"
 
 nb = nbf.v4.new_notebook(cells=cells)
 nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3"}
