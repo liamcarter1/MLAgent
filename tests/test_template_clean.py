@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from mlagent.cleaning import OPS as LIBRARY_OPS
 from mlagent.cleaning import apply_steps, render_clean_py
 
 TEMPLATE = Path("mlagent/templates/common").resolve()
@@ -99,6 +100,11 @@ def test_rendered_clean_py_is_importable_and_standalone(project):
     pd.testing.assert_frame_equal(out, apply_steps(messy(), STEPS), check_dtype=False)
 
 
+def test_template_ops_table_matches_the_cleaning_library():
+    module = load_module("clean")
+    assert set(module.OPS) == set(LIBRARY_OPS)
+
+
 def test_empty_steps_render_and_run(project):
     df = messy()
     project.data_raw.mkdir(parents=True, exist_ok=True)
@@ -112,13 +118,19 @@ def test_empty_steps_render_and_run(project):
     assert len(produced) == len(df)
 
 
-def test_cli_argv_ignores_ipykernel_launcher_but_parses_run_and_script_argv(monkeypatch):
+def test_cli_argv_ignores_kernel_launchers_but_parses_run_and_script_argv(monkeypatch):
     module = load_module("clean")
 
     monkeypatch.setattr(sys, "argv", ["/x/ipykernel_launcher.py", "-f", "k.json"])
     assert module.cli_argv() == []
 
+    monkeypatch.setattr(sys, "argv", ["/x/colab_kernel_launcher.py", "-f", "k.json"])
+    assert module.cli_argv() == []
+
     monkeypatch.setattr(sys, "argv", ["clean.py", "--project", "foo"])
+    assert module.cli_argv() == ["--project", "foo"]
+
+    monkeypatch.setattr(sys, "argv", ["/some/dir/clean.py", "--project", "foo"])
     assert module.cli_argv() == ["--project", "foo"]
 
     monkeypatch.setattr(sys, "argv", ["clean.py"])

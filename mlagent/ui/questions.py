@@ -165,7 +165,9 @@ class FormQuestioner:
     A key that is absent from `answers` falls back silently: the form simply does not
     cover that question. A key that is present but empty or unusable falls back with a
     one-line note, because the user did fill the form in and deserves to know why they
-    are being asked again.
+    are being asked again. Exception: `text()` treats a blank value as the answer
+    (the default) when the question has a non-None `default`, since a blank field on an
+    optional question is a legitimate "use the default" answer, not a skipped one.
     """
 
     def __init__(
@@ -214,6 +216,13 @@ class FormQuestioner:
         return self.fallback.choice(question, options, allow_other=allow_other, key=key)
 
     def text(self, prompt: str, default: str | None = None, key: str | None = None) -> str:
+        if key is not None and key in self.answers:
+            value = self.answers[key]
+            blank = value is None or (isinstance(value, str) and not value.strip())
+            if blank and default is not None:
+                # The question is optional by construction (it has a default), so a
+                # blank form field is a real answer, not a sign the user skipped it.
+                return self._accept(key, default)
         raw = self._raw(key)
         if raw is not _MISSING:
             return self._accept(key, str(raw).strip())

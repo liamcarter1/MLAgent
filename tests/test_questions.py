@@ -110,6 +110,21 @@ def test_form_notes_and_falls_back_on_empty_or_invalid_values():
     assert q.used == []
 
 
+def test_form_text_blank_value_is_the_default_answer_when_the_question_is_optional():
+    q, fallback, notes = make_form({"clean.drop_columns": ""}, [])
+    assert q.text("Drop which columns?", default="", key="clean.drop_columns") == ""
+    assert q.used == ["clean.drop_columns"]
+    assert fallback.asked == [] and notes == []
+
+
+def test_form_text_blank_value_still_falls_back_with_a_note_when_no_default():
+    q, fallback, notes = make_form({"intake.goal": ""}, ["typed goal"])
+    assert q.text("Goal?", key="intake.goal") == "typed goal"
+    assert fallback.asked == ["Goal?"]
+    assert len(notes) == 1 and "asking instead" in notes[0]
+    assert q.used == []
+
+
 def test_form_choice_allows_other_when_permitted():
     q, _fallback, notes = make_form({"data.hf_query": "credit card fraud"}, [])
     assert q.choice("Dataset?", ["iris", "titanic"], allow_other=True,

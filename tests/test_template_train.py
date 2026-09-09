@@ -181,13 +181,19 @@ def load_train_module():
         sys.path.pop(0)
 
 
-def test_cli_argv_ignores_ipykernel_launcher_but_parses_run_and_script_argv(monkeypatch):
+def test_cli_argv_ignores_kernel_launchers_but_parses_run_and_script_argv(monkeypatch):
     train_module = load_train_module()
 
     monkeypatch.setattr(sys, "argv", ["/x/ipykernel_launcher.py", "-f", "k.json"])
     assert train_module.cli_argv() == []
 
+    monkeypatch.setattr(sys, "argv", ["/x/colab_kernel_launcher.py", "-f", "k.json"])
+    assert train_module.cli_argv() == []
+
     monkeypatch.setattr(sys, "argv", ["train.py", "--dry-run"])
+    assert train_module.cli_argv() == ["--dry-run"]
+
+    monkeypatch.setattr(sys, "argv", ["/some/dir/train.py", "--dry-run"])
     assert train_module.cli_argv() == ["--dry-run"]
 
     monkeypatch.setattr(sys, "argv", ["train.py"])

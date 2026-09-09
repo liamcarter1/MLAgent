@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mlagent import templates_io
 from mlagent.codewalk import HEADER_TITLE, render_walkthrough, split_sections
 
 SOURCE = '''"""A script."""
@@ -47,3 +48,14 @@ def test_render_walkthrough_fences_the_code_and_adds_explanations():
 
 def test_render_walkthrough_with_no_sections():
     assert render_walkthrough([], {}) == ""
+
+
+def test_every_generated_script_has_at_least_two_sections_including_settings():
+    template_dir = templates_io.template_dir("tabular_sklearn")
+    paths = [template_dir / name for name in templates_io.CODE_FILES]
+    paths += [templates_io.COMMON_DIR / "profile.py", templates_io.COMMON_DIR / "clean.py"]
+    for path in paths:
+        sections = split_sections(path.read_text(encoding="utf-8"))
+        titles = [title for title, _code in sections]
+        assert len(sections) >= 2, f"{path.name} has too few sections: {titles}"
+        assert "settings" in titles, f"{path.name} has no settings section: {titles}"

@@ -24,6 +24,7 @@ import pandas as pd
 from pandas.api import types as ptypes
 
 # --- settings ---
+SCRIPT_NAME = "clean.py"
 PROJECT_DIR = Path(".")
 META_FILE = "data_meta.json"
 CLEAN_PATH = Path("data") / "clean" / "data.csv"
@@ -219,18 +220,17 @@ def save(fig, plots_dir: Path, name: str) -> str:
 
 # --- command line ---
 def cli_argv() -> list[str]:
-    """Arguments when run as a script or via `%run`; nothing under a bare ipykernel cell.
+    """Arguments when run as a script or via `%run`; nothing under a bare kernel cell.
 
-    A real Jupyter/Colab kernel sets `sys.argv[0]` to `.../ipykernel_launcher.py`, which
-    also ends in `.py`, so checking the extension alone would treat the kernel's own
+    A Jupyter/Colab kernel sets `sys.argv[0]` to its own launcher (e.g.
+    `ipykernel_launcher.py` or Colab's `colab_kernel_launcher.py`), which also ends in
+    `.py`, so checking the extension alone would treat the kernel's own
     `-f <connection-file>.json` flags as ours and crash `argparse`. `%run script.py --flag`
-    is different: there argv[0] is the script name, not the launcher, so its flags are
-    still parsed.
+    is different: there argv[0] is this script's own name, not the launcher, so its flags
+    are still parsed.
     """
     name = Path(sys.argv[0]).name.lower() if sys.argv else ""
-    if name.startswith("ipykernel"):
-        return []
-    return sys.argv[1:]
+    return sys.argv[1:] if name == SCRIPT_NAME.lower() else []
 
 
 def main(argv: list[str] | None = None) -> int:

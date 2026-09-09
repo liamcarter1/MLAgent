@@ -78,13 +78,19 @@ def test_profile_script_has_walkthrough_sections_and_an_argv_guard(project):
     assert source.count("\n# --- ") >= 5
 
 
-def test_cli_argv_ignores_ipykernel_launcher_but_parses_run_and_script_argv(monkeypatch):
+def test_cli_argv_ignores_kernel_launchers_but_parses_run_and_script_argv(monkeypatch):
     module = load_module("profile")
 
     monkeypatch.setattr(sys, "argv", ["/x/ipykernel_launcher.py", "-f", "k.json"])
     assert module.cli_argv() == []
 
+    monkeypatch.setattr(sys, "argv", ["/x/colab_kernel_launcher.py", "-f", "k.json"])
+    assert module.cli_argv() == []
+
     monkeypatch.setattr(sys, "argv", ["profile.py", "--tag", "clean"])
+    assert module.cli_argv() == ["--tag", "clean"]
+
+    monkeypatch.setattr(sys, "argv", ["/some/dir/profile.py", "--tag", "clean"])
     assert module.cli_argv() == ["--tag", "clean"]
 
     monkeypatch.setattr(sys, "argv", ["profile.py"])

@@ -43,39 +43,21 @@ FORM_ANSWERS = {
 ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "report"]
 
 
-# FORM_ANSWERS keys whose value is intentionally blank (e.g. "no extra columns to drop"):
-# FormQuestioner treats a blank string as unanswered and falls back to this questioner, but
-# the blank *is* the real answer here, not a missing scripted one.
-BLANK_FORM_KEYS = frozenset({"clean.drop_columns"})
-
-
 class AutoApproveQuestioner(ScriptedQuestioner):
     """Every confirm() is approved without consuming a scripted answer (the number of
-    audit fixes varies with the data). Also serves as FormQuestioner's fallback: a blank
-    form field named in `blank_keys` is itself the answer, so it returns the caller's
-    default instead of raising; any other question still requires a scripted answer, so a
-    stage that starts asking something new still fails the test as before."""
-
-    def __init__(self, answers: list[str], blank_keys: frozenset[str] = frozenset()):
-        super().__init__(answers)
-        self._blank_keys = blank_keys
+    audit fixes varies with the data). Any other question still requires a scripted
+    answer, so a stage that starts asking something new still fails the test as before."""
 
     def confirm(self, question: str, default: bool = True, key: str | None = None) -> bool:
         self.asked.append(question)
         return True
-
-    def text(self, prompt: str, default: str | None = None, key: str | None = None) -> str:
-        if key in self._blank_keys and default is not None:
-            self.asked.append(prompt)
-            return default
-        return super().text(prompt, default=default, key=key)
 
 
 def make_orchestrator(project, stages=None):
     ctx = StageContext(
         project=project,
         llm=FakeLLM([]),  # empty script -> every call raises LLMError -> graceful fallback
-        questioner=AutoApproveQuestioner([], blank_keys=BLANK_FORM_KEYS),
+        questioner=AutoApproveQuestioner([]),
         explainer=None,
         display=lambda s: None,
         display_figure=lambda path, caption="": None,

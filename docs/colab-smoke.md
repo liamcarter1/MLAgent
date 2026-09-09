@@ -107,3 +107,7 @@ Run in a fresh Colab runtime, on a new project name, with `LEARNING_LEVEL` set t
     was (or reports nothing to do) without re-asking any earlier question. If a debrief
     insists the outputs are missing because Drive's timestamps lag, `orch.debrief('train')`
     forces it through.
+12. **Upgrading an older project re-picks a model.** A project created before Milestone 4
+    has a `config.json` with no `model_type` key. Opening it under this build, the codegen
+    stage treats that as incomplete and re-runs, asking the model-family question again;
+    this is expected, not a bug.

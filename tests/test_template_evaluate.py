@@ -162,13 +162,19 @@ def test_other_families_train_and_evaluate(clean_project, model_type):
     assert run(root, "evaluate.py").returncode == 0
 
 
-def test_cli_argv_ignores_ipykernel_launcher_but_parses_run_and_script_argv(monkeypatch):
+def test_cli_argv_ignores_kernel_launchers_but_parses_run_and_script_argv(monkeypatch):
     module = load_evaluate_module()
 
     monkeypatch.setattr(sys, "argv", ["/x/ipykernel_launcher.py", "-f", "k.json"])
     assert module.cli_argv() == []
 
+    monkeypatch.setattr(sys, "argv", ["/x/colab_kernel_launcher.py", "-f", "k.json"])
+    assert module.cli_argv() == []
+
     monkeypatch.setattr(sys, "argv", ["evaluate.py", "--split", "test"])
+    assert module.cli_argv() == ["--split", "test"]
+
+    monkeypatch.setattr(sys, "argv", ["/some/dir/evaluate.py", "--split", "test"])
     assert module.cli_argv() == ["--split", "test"]
 
     monkeypatch.setattr(sys, "argv", ["evaluate.py"])

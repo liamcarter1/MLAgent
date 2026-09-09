@@ -20,14 +20,17 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+# --- settings ---
 META_FILE = "data_meta.json"
 MAX_CATEGORY_CODES = 200  # above this a column is treated as plain numeric codes
 
 
+# --- loading ---
 def read_meta(project_dir: Path) -> dict:
     return json.loads((project_dir / META_FILE).read_text(encoding="utf-8"))
 
 
+# --- encoding ---
 def _encode_column(series: pd.Series, categories: list[str]) -> pd.Series:
     mapping = {value: float(i) for i, value in enumerate(categories)}
     values = [mapping.get(str(v), np.nan) if pd.notna(v) else np.nan for v in series.tolist()]
@@ -60,6 +63,7 @@ def encode_features(
     return out, cats, mask
 
 
+# --- splitting ---
 def _split(X: pd.DataFrame, y: pd.Series, fraction: float, seed: int, stratify: bool):
     strat = y if stratify and y.value_counts().min() >= 2 else None
     try:
@@ -123,6 +127,7 @@ def load_data(project_dir: Path | str, config: dict) -> dict:
     return data
 
 
+# --- validation ---
 def validate(data: dict) -> None:
     """Raise ValueError if the splits are unusable: empty, overlapping, or one class."""
     for name in ("X_train", "X_val", "X_test"):

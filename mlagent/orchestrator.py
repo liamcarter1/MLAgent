@@ -78,10 +78,14 @@ class Orchestrator:
         The escape hatch for when Drive's mtimes lie about outputs the user really did make.
         """
         stage = self._stage(name)
+        previous = self.ctx.stage
         self.ctx.stage = name
-        stage_debrief(stage, self.ctx)
-        if stage.is_complete(self.ctx):
-            self.mark_complete(name)
+        try:
+            stage_debrief(stage, self.ctx)
+            if stage.is_complete(self.ctx):
+                self.mark_complete(name)
+        finally:
+            self.ctx.stage = previous
 
     def run(
         self, until: str | None = None, answers: dict[str, object] | None = None
