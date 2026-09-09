@@ -111,19 +111,32 @@ class TrainStage(ScriptStageBase):
         entry = next(
             (r for r in runs if r.get("started_at") == metrics["started_at"]), None
         )
-        figures: list[Path] = []
         if entry is None:
+            ok = metrics.get("status") == "done"
+            if ok:
+                eval_data = project.read_json(EVAL_VAL_FILE)
+                if (
+                    not isinstance(eval_data, dict)
+                    or eval_data.get("started_at") != metrics["started_at"]
+                ):
+                    ctx.display(
+                        "The `train.py` run finished, but `eval_val.json` doesn't match it "
+                        "yet. Run the `evaluate.py` cell, then run this cell again."
+                    )
+                    return
             run_id = len(runs) + 1
-            figures = archive_run(project, run_id)
+            figures = archive_run(project, run_id) if ok else []
             checkpoint = (
                 f"checkpoints/run{run_id}.joblib"
-                if (project.checkpoints_dir / f"run{run_id}.joblib").exists()
+                if ok and (project.checkpoints_dir / f"run{run_id}.joblib").exists()
                 else None
             )
             entry = append_run(project.runs_path, build_run_entry(metrics, checkpoint))
         else:
-            figures = sorted(project.plots_dir.glob(f"run{entry['run_id']}_*.png"))
-            figures.sort(key=lambda p: (not p.name.endswith("_training.png"), p.name))
+            figures = sorted(
+                project.plots_dir.glob(f"run{entry['run_id']}_*.png"),
+                key=lambda p: (not p.name.endswith("_training.png"), p.name),
+            )
 
         run_id = entry["run_id"]
         if entry["status"] != "done":

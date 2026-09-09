@@ -43,6 +43,7 @@ PROJECT_DIR = Path(".")
 CONFIG_FILE = "config.json"
 SPEC_FILE = "spec.json"
 RUNS_FILE = "runs.jsonl"
+METRICS_FILE = "metrics.json"
 DEFAULT_CHECKPOINT = "checkpoints/best.joblib"
 SPLITS = ("val", "test")
 HIGHER_IS_BETTER = {"accuracy": True, "f1": True, "r2": True, "rmse": False, "mae": False}
@@ -131,7 +132,9 @@ def evaluate_split(model, X, y, task_type: str, metric: str, n_classes: int | No
     }
 
 
-def eval_record(split: str, task_type: str, metric: str, classes, ev: dict) -> dict:
+def eval_record(
+    split: str, task_type: str, metric: str, classes, ev: dict, started_at: str | None
+) -> dict:
     return {
         "split": split,
         "task_type": task_type,
@@ -142,6 +145,7 @@ def eval_record(split: str, task_type: str, metric: str, classes, ev: dict) -> d
         "y_true": ev["y_true"],
         "y_pred": ev["y_pred"],
         "y_proba": ev["y_proba"],
+        "started_at": started_at,
     }
 
 
@@ -374,8 +378,11 @@ def main(argv: list[str] | None = None) -> int:
     X = data[f"X_{args.split}"]
     y = data[f"y_{args.split}"]
 
+    metrics = read_json(project_dir / METRICS_FILE, default=None)
+    started_at = metrics.get("started_at") if isinstance(metrics, dict) else None
+
     ev = evaluate_split(model, X, y, task_type, metric, n_classes)
-    record = eval_record(args.split, task_type, metric, data["classes"], ev)
+    record = eval_record(args.split, task_type, metric, data["classes"], ev, started_at)
     record["checkpoint"] = Path(checkpoint).as_posix()
     record["run_id"] = run_id
     record["figures"] = save_figures(record, project_dir / "plots", args.split)

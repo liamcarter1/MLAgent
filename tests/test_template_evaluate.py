@@ -53,6 +53,8 @@ def test_evaluate_val_writes_record_and_classification_figures(clean_project):
                                       "val_per_class.png"}
     for name in record["figures"]:
         assert (root / "plots" / name).exists()
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert record["started_at"] == metrics["started_at"]
 
 
 def test_evaluate_test_uses_the_best_run_checkpoint(clean_project):
@@ -83,6 +85,15 @@ def test_evaluate_regression_figures_and_explicit_checkpoint(regression_project)
     assert record["y_proba"] is None and record["metric"] == "rmse"
     assert set(record["figures"]) == {"test_pred_vs_actual.png", "test_residuals.png"}
     assert record["run_id"] is None
+
+
+def test_evaluate_started_at_is_none_without_a_metrics_file(clean_project):
+    root = train(clean_project)
+    (root / "metrics.json").unlink()
+    proc = run(root, "evaluate.py")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    record = json.loads((root / "eval_val.json").read_text(encoding="utf-8"))
+    assert record["started_at"] is None
 
 
 def test_evaluate_without_a_checkpoint_fails_clearly(clean_project):

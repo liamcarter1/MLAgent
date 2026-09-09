@@ -120,6 +120,11 @@ def test_debriefing_twice_does_not_log_the_same_run_twice(clean_project):
 
 def test_failed_run_is_logged_and_the_stage_stays_incomplete(clean_project):
     project = prepared(clean_project)
+    project.ensure_dirs()
+    # Leftover outputs from an earlier successful run must not be archived under run1's
+    # name just because a later run's metrics.json happens to say "failed".
+    (project.plots_dir / "training_curves.png").write_bytes(b"leftover")
+    (project.checkpoints_dir / "best.joblib").write_bytes(b"leftover")
     project.write_json("metrics.json", {
         "status": "failed", "started_at": "2026-09-08T10:00:00.000000+00:00",
         "model_type": "gradient_boosting", "config": {"epochs": 3}, "epochs": [],
@@ -131,7 +136,10 @@ def test_failed_run_is_logged_and_the_stage_stays_incomplete(clean_project):
     assert not stage.is_complete(ctx)
     runs = runlog.read_runs(project.runs_path)
     assert runs[0]["status"] == "failed" and "boom" in runs[0]["error"]
+    assert runs[0]["checkpoint"] is None
     assert any("boom" in s for s in shown)
+    assert not list(project.plots_dir.glob("run1_*.png"))
+    assert not (project.checkpoints_dir / "run1.joblib").exists()
 
 
 def test_debrief_without_metrics_says_so(clean_project):
@@ -181,6 +189,51 @@ def test_archive_run_copies_curves_checkpoint_and_val_figures(project):
     assert [p.name for p in archived] == ["run7_training.png", "run7_val_confusion.png",
                                           "run7_val_roc_pr.png"]
     assert (project.checkpoints_dir / "run7.joblib").exists()
+
+
+def test_debrief_refuses_a_stale_eval_val_json(clean_project):
+    project = prepared(clean_project)
+    ctx, shown, figures = make_ctx(project)
+    stage = TrainStage()
+    handoff = stage.prepare(ctx)
+    run_cells(project, handoff)
+    stage.debrief(ctx)
+    assert stage.is_complete(ctx)
+    assert len(runlog.read_runs(project.runs_path)) == 1
+
+    # Rerun only train.py: eval_val.json now belongs to the previous run.
+    run_cells(project, Handoff(stage="train", commands=[["train.py"]], outputs=[]))
+    shown.clear()
+    figures.clear()
+    stage.debrief(ctx)
+    runs = runlog.read_runs(project.runs_path)
+    assert len(runs) == 1
+    assert not stage.is_complete(ctx)
+    assert any("evaluate.py" in s for s in shown)
+    assert not figures
+
+    run_cells(project, Handoff(stage="train", commands=[["evaluate.py"]], outputs=[]))
+    stage.debrief(ctx)
+    runs = runlog.read_runs(project.runs_path)
+    assert [r["run_id"] for r in runs] == [1, 2]
+    assert stage.is_complete(ctx)
+
+
+def test_narrative_headline_survives_a_non_numeric_target_value(clean_project):
+    project = prepared(clean_project)
+    ctx, _shown, _figures = make_ctx(project, FakeLLM([]))
+    stage = TrainStage()
+
+    class FakeSpec:
+        task_type = "tabular_classification"
+        metric = "accuracy"
+        target_value = None
+
+    entry = {"run_id": 1, "best_val_metric": 0.8, "best_epoch": 2}
+    metrics = {"model_type": "gradient_boosting", "epochs": [], "best_epoch": 2}
+    text = stage._narrative(ctx, FakeSpec(), entry, metrics, {}, [])
+    assert "Run 1 finished" in text
+    assert "target -" in text
 
 
 def test_llm_failure_still_completes(clean_project):
