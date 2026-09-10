@@ -121,7 +121,9 @@ def test_too_few_epochs_reads_as_underfitting():
 
 def test_missing_metrics_archive_falls_back_to_plateau():
     runs, _by_run = history(run(1, [1.0, 0.9, 0.8]))
-    assert diagnose(runs, {}, spec()).label == "plateau"
+    d = diagnose(runs, {}, spec())
+    assert d.label == "plateau"
+    assert d.evidence["no_epoch_data"] is True
 
 
 @pytest.mark.parametrize("family", ["gradient_boosting", "random_forest", "linear"])

@@ -121,6 +121,7 @@ def diagnose(runs: list[dict], metrics_by_run: dict[int, dict], spec) -> Diagnos
         "stopped_early": bool(metrics.get("stopped_early")),
     })
     if n == 0:
+        evidence["no_epoch_data"] = True
         return Diagnosis("plateau", evidence, latest_id, best_id, improved)
     if n < MIN_EPOCHS_TO_JUDGE:
         evidence["val_trend"] = round(_trend(val), 4)

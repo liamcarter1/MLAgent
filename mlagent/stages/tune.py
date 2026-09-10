@@ -25,7 +25,13 @@ from mlagent.diagnose import (
 from mlagent.llm import LLMError, ToolSpec
 from mlagent.prompts_io import audience, load_prompt
 from mlagent.runlog import best_run, is_better, read_runs, summarise
-from mlagent.runs import EVAL_VAL_FILE, log_finished_run, read_run_metrics, run_problem
+from mlagent.runs import (
+    EVAL_VAL_FILE,
+    archive_metrics,
+    log_finished_run,
+    read_run_metrics,
+    run_problem,
+)
 from mlagent.spec import Spec
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.teaching import EXPERT, material
@@ -46,6 +52,7 @@ STOP_LABEL = "Stop tuning and write the report"
 COMPARE_CURVES = "compare_curves"
 COMPARE_RUNS = "compare_runs"
 CONTINUE = "continue"
+DECISIONS = ("continue", "stopped", "target_met", "rounds_exhausted")
 
 DECISION_TEXT = {
     "stopped": (
@@ -137,6 +144,28 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def backfill_latest_metrics(project, runs: list[dict], metrics_by_run: dict[int, dict]) -> dict:
+    """Archive `metrics.json` under the latest run's id if it was logged before this branch.
+
+    `read_run_metrics` only finds runs that have a `runs/run{N}_metrics.json` archive; a
+    project whose run 1 predates the tuning loop has none. If the current `metrics.json`
+    still matches the latest run (same `started_at`), archive it now so `diagnose` and the
+    comparison figures see its curve instead of treating it as missing.
+    """
+    if not runs:
+        return metrics_by_run
+    latest = runs[-1]
+    run_id = latest.get("run_id")
+    if not isinstance(run_id, int) or run_id in metrics_by_run:
+        return metrics_by_run
+    metrics = project.read_json(cfg.METRICS_FILE)
+    if isinstance(metrics, dict) and metrics.get("started_at") == latest.get("started_at"):
+        archive_metrics(project, run_id, metrics)
+        metrics_by_run = dict(metrics_by_run)
+        metrics_by_run[run_id] = metrics
+    return metrics_by_run
+
+
 def empty_tune_state(max_rounds: int) -> dict:
     return {"round": 0, "max_rounds": int(max_rounds), "decision": CONTINUE, "pending": None,
             "history": []}
@@ -148,15 +177,24 @@ def load_tune_state(project, max_rounds: int) -> dict:
     base = empty_tune_state(max_rounds)
     if isinstance(state, dict) and isinstance(state.get("history"), list):
         base.update(state)
+    if base["decision"] not in DECISIONS:
+        base["decision"] = CONTINUE
     return base
 
 
 def describe(diagnosis: Diagnosis) -> str:
     """The diagnosis in plain words, with the numbers that back it."""
-    text = DIAGNOSIS_TEXT.get(diagnosis.label, DIAGNOSIS_TEXT["plateau"]).format(
-        error=diagnosis.evidence.get("error", "unknown error")
-    )
     ev = diagnosis.evidence
+    if ev.get("no_epoch_data"):
+        text = (
+            "**Diagnosis: no per-epoch curve is archived for this run** (it was logged "
+            "before tuning existed), so I am judging it by its best validation score alone. "
+            "The next run will be archived in full."
+        )
+    else:
+        text = DIAGNOSIS_TEXT.get(diagnosis.label, DIAGNOSIS_TEXT["plateau"]).format(
+            error=ev.get("error", "unknown error")
+        )
     parts = []
     if isinstance(ev.get("val_trend"), int | float):
         parts.append(f"validation loss changed {ev['val_trend']:+.1%} over the last third")
@@ -183,7 +221,10 @@ class TuneStage(ScriptStageBase):
     # --- lifecycle -----------------------------------------------------------------------
     def is_complete(self, ctx: StageContext) -> bool:
         state = ctx.project.read_json(cfg.TUNE_STATE_FILE)
-        return isinstance(state, dict) and state.get("decision") not in (None, CONTINUE)
+        if not isinstance(state, dict):
+            return False
+        decision = state.get("decision")
+        return decision in DECISIONS and decision != CONTINUE
 
     def on_reset(self, ctx: StageContext) -> None:
         (ctx.project.root / cfg.TUNE_STATE_FILE).unlink(missing_ok=True)
@@ -199,14 +240,15 @@ class TuneStage(ScriptStageBase):
             return None
         state = load_tune_state(project, spec.max_rounds)
         if state["decision"] != CONTINUE:
-            ctx.display(DECISION_TEXT[state["decision"]])
+            ctx.display(DECISION_TEXT.get(state["decision"], DECISION_TEXT["stopped"]))
             return None
         config = project.read_json(cfg.CONFIG_FILE)
         if not isinstance(config, dict) or not config.get("model_type"):
             raise RuntimeError("config.json not found; run the codegen stage first")
         nested = load_schema(TEMPLATE_FOR_TASK[spec.task_type])
 
-        diagnosis = diagnose(runs, read_run_metrics(project, runs), spec)
+        metrics_by_run = backfill_latest_metrics(project, runs, read_run_metrics(project, runs))
+        diagnosis = diagnose(runs, metrics_by_run, spec)
         if diagnosis.label == "target_met":
             state["decision"] = "target_met"
             project.write_json(cfg.TUNE_STATE_FILE, state)
@@ -231,8 +273,11 @@ class TuneStage(ScriptStageBase):
         if not applied:
             state["decision"] = "stopped"
             project.write_json(cfg.TUNE_STATE_FILE, state)
-            ctx.display("I have no change to propose for this run, so tuning stops here. "
-                        + DECISION_TEXT["stopped"])
+            ctx.display(
+                "I have no change to propose for this run, so tuning stops here. The report "
+                "stage evaluates the best run on the [[test set]]; to try a change by hand, "
+                "edit `config.json` and use the *Train again* cell."
+            )
             return None
         for proposal, _new_config, diff, notes in applied:
             flat = schema_for(nested, str(_new_config["model_type"]))
@@ -387,7 +432,13 @@ class TuneStage(ScriptStageBase):
         spec = ctx.spec()
         state = load_tune_state(project, spec.max_rounds)
         pending = state.get("pending")
-        if not isinstance(pending, dict) or not project.exists(cfg.TUNE_STATE_FILE):
+        if not isinstance(pending, dict):
+            # A Ctrl-C between the state write and the orchestrator forgetting the handoff
+            # can strand `pending` at None while the round is actually over (history has
+            # the finished run and the decision is still "continue"); ask to re-prepare
+            # instead of reporting "did not finish" forever.
+            if state["decision"] == CONTINUE and state["history"]:
+                return True
             return None
         problem = run_problem(project)
         if problem:
@@ -437,9 +488,12 @@ class TuneStage(ScriptStageBase):
             "the dashed target line."
         )
         narrative = ctx.teaching().debrief("tune_debrief", payload, figures, fallback=fallback)
-        ctx.display(self._headline(spec, entry, previous_best, improved) + "\n\n" + narrative)
+        round_after = int(pending.get("round") or state["round"] + 1)
+        more_rounds = round_after < state["max_rounds"]
+        ctx.display(self._headline(spec, entry, previous_best, improved, more_rounds=more_rounds)
+                    + "\n\n" + narrative)
 
-        state["round"] = int(pending.get("round") or state["round"] + 1)
+        state["round"] = round_after
         # `log_finished_run` returns the existing entry (`new=False`) when this run was
         # already logged; only append a new history entry the first time this round is
         # debriefed, so calling debrief twice for the same run stays idempotent (ruling 3).
@@ -459,16 +513,18 @@ class TuneStage(ScriptStageBase):
             state["decision"] = CONTINUE
         project.write_json(cfg.TUNE_STATE_FILE, state)
         if state["decision"] != CONTINUE:
-            ctx.display(DECISION_TEXT[state["decision"]])
+            ctx.display(DECISION_TEXT.get(state["decision"], DECISION_TEXT["stopped"]))
             return None
         return True
 
     @staticmethod
-    def _headline(spec: Spec, entry: dict, previous_best: dict | None, improved: bool) -> str:
+    def _headline(spec: Spec, entry: dict, previous_best: dict | None, improved: bool, *,
+                 more_rounds: bool) -> str:
         run_id = entry["run_id"]
         if entry["status"] != "done":
-            return (f"Run {run_id} failed: {entry.get('error')}. I will propose a gentler "
-                    "configuration next.")
+            ending = ("I will propose a gentler configuration next." if more_rounds
+                      else "That was the last allowed round.")
+            return f"Run {run_id} failed: {entry.get('error')}. {ending}"
         value = _fmt(entry.get("best_val_metric"))
         if previous_best is None:
             return f"Run {run_id} finished: best validation {spec.metric} {value}."

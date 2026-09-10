@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from mlagent import runlog
+from mlagent.diagnose import Diagnosis
 from mlagent.llm import FakeLLM
 from mlagent.stages.base import Handoff, StageContext
 from mlagent.stages.codegen import CodegenStage
@@ -16,8 +17,17 @@ from mlagent.stages.tune import (
     TUNE_OUTPUTS,
     TuneStage,
     apply_label,
+    describe,
+    load_tune_state,
 )
 from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
+
+FAILED_METRICS = {
+    "status": "failed", "started_at": "2026-09-10T09:00:00.000000+00:00",
+    "model_type": "gradient_boosting", "epochs": [], "best_epoch": None,
+    "best_val_metric": None, "stopped_early": False,
+    "error": "ValueError: non-finite loss at epoch 1", "seconds": 0.1,
+}
 
 SMALL = {"epochs": 3, "iters_per_epoch": 3, "early_stopping_patience": 0}
 
@@ -356,3 +366,91 @@ def test_a_stale_form_answer_does_not_block_stopping_after_a_no_op_edit(clean_pr
     assert TuneStage().prepare(ctx) is None
     assert project.read_json("tune_state.json")["decision"] == "stopped"
     assert project.read_json("config.json")["learning_rate"] == 0.1  # nothing applied
+
+
+def test_prepare_backfills_a_legacy_run_archive(clean_project):
+    project = with_run_one(clean_project)
+    (project.runs_dir / "run1_metrics.json").unlink()
+    ctx, shown, _f = make_ctx(project, answers=[STOP_LABEL])
+    TuneStage().prepare(ctx)
+    assert (project.runs_dir / "run1_metrics.json").exists()
+    assert project.read_json("runs/run1_metrics.json") == project.read_json("metrics.json")
+    assert "no per-epoch curve" not in "\n".join(shown)
+
+
+def test_describe_is_honest_without_epoch_data():
+    d = Diagnosis("plateau", {"no_epoch_data": True}, 1, 1, False)
+    text = describe(d)
+    assert "no per-epoch curve" in text
+    assert "flattened" not in text
+
+
+def test_unknown_decision_is_treated_as_continue(clean_project):
+    project = with_run_one(clean_project)
+    project.write_json("tune_state.json", {"round": 1, "max_rounds": 3, "decision": "bogus",
+                                           "pending": None, "history": []})
+    ctx, _s, _f = make_ctx(project)
+    assert TuneStage().is_complete(ctx) is False
+    assert load_tune_state(project, 3)["decision"] == "continue"
+
+
+def test_a_failed_run_is_logged_with_its_diff_and_the_next_round_proposes_a_gentler_config(
+    clean_project,
+):
+    project = with_run_one(clean_project)
+    ctx, _s, _f = make_ctx(project, answers=[apply_label(1)])
+    stage = TuneStage()
+    handoff = stage.prepare(ctx)
+    assert handoff is not None
+    config = project.read_json("config.json")
+    project.write_json("metrics.json", dict(FAILED_METRICS, config=config))
+
+    ctx2, shown2, _f2 = make_ctx(project, FakeLLM([]))
+    assert stage.debrief(ctx2) is True
+    text2 = "\n".join(shown2)
+    assert "Run 2 failed" in text2 and "non-finite" in text2
+    runs = runlog.read_runs(project.runs_path)
+    assert len(runs) == 2
+    assert runs[1]["status"] == "failed"
+    assert runs[1]["applied_diff"] is not None
+    assert (project.runs_dir / "run2_metrics.json").exists()
+    assert (project.plots_dir / "compare_curves.png").exists()
+    assert (project.plots_dir / "compare_runs.png").exists()
+
+    ctx3, shown3, _f3 = make_ctx(project, FakeLLM([]), answers=[STOP_LABEL])
+    stage.prepare(ctx3)
+    text3 = "\n".join(shown3)
+    assert "the last run failed" in text3.lower()
+    assert "| learning_rate |" in text3
+
+
+def test_failed_run_headline_says_last_round_when_no_rounds_remain(clean_project):
+    project = with_run_one(clean_project)
+    spec = project.read_json("spec.json")
+    spec["max_rounds"] = 1
+    project.write_json("spec.json", spec)
+    ctx, _s, _f = make_ctx(project, answers=[apply_label(1)])
+    stage = TuneStage()
+    handoff = stage.prepare(ctx)
+    assert handoff is not None
+    config = project.read_json("config.json")
+    project.write_json("metrics.json", dict(FAILED_METRICS, config=config))
+
+    ctx2, shown2, _f2 = make_ctx(project, FakeLLM([]))
+    assert stage.debrief(ctx2) is None
+    text2 = "\n".join(shown2)
+    assert "last allowed round" in text2
+    assert "gentler" not in text2
+    assert project.read_json("tune_state.json")["decision"] == "rounds_exhausted"
+
+
+def test_debrief_with_a_finished_round_and_no_pending_asks_to_re_prepare(clean_project):
+    project = with_run_one(clean_project)
+    project.write_json("tune_state.json", {
+        "round": 1, "max_rounds": 3, "decision": "continue", "pending": None,
+        "history": [{"round": 1, "diagnosis": "plateau", "applied_diff": {}, "run_id": 2,
+                     "improved": False}],
+    })
+    ctx, shown, _f = make_ctx(project)
+    assert TuneStage().debrief(ctx) is True
+    assert shown == []

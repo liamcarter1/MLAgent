@@ -75,7 +75,8 @@ CAPTIONS: dict[str, str] = {
     "compare_runs": (
         "One bar per run: the best validation score it reached, with your target as the "
         "dashed line. A hollow bar is a run that failed. Compare the labels to see which "
-        "change moved the bar, and in which direction."
+        "change moved the bar, and in which direction. For accuracy, F1 and R2 a longer bar "
+        "is better; for RMSE and MAE a shorter bar is better."
     ),
 }
 
