@@ -178,7 +178,7 @@ def test_huggingface_blank_query_form_value_asks_instead_of_searching_empty(proj
 
 def test_image_task_is_not_supported_yet(project):
     ctx, _shown, _figures = make_ctx(project, [], task="image_classification")
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="image_classification"):
         DataStage().prepare(ctx)
 
 

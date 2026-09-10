@@ -7,9 +7,10 @@ import json
 import pandas as pd
 from pandas.api import types as ptypes
 
-from mlagent.audit import Issue, audit_tabular
-from mlagent.cleaning import describe_step, render_clean_py
+from mlagent.audit import Issue
+from mlagent.cleaning import describe_step
 from mlagent.llm import LLMError, ask_text
+from mlagent.modality import modality_for
 from mlagent.profile import profile_dataframe
 from mlagent.prompts_io import audience, load_prompt
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
@@ -45,9 +46,10 @@ class CleanStage(ScriptStageBase):
             raise RuntimeError("data_meta.json has no target; run the data stage first")
         df = pd.read_csv(ctx.project.data_raw / RAW_FILE)
         before = profile_dataframe(df, target)
+        modality = modality_for(str(meta.get("task_type") or ctx.spec().task_type))
 
         ctx.teaching().preamble("clean", {"target": target, "n_rows": int(len(df))})
-        issues = audit_tabular(df, target)
+        issues = modality.audit(df, target)
         decisions = self._review_issues(ctx, issues, before)
         steps = self._collect_steps(decisions)
 
@@ -60,7 +62,9 @@ class CleanStage(ScriptStageBase):
             AUDIT_FILE,
             {"issues": [i.to_dict() for i in issues], "decisions": decisions, "steps": steps},
         )
-        (ctx.project.root / CLEAN_PY).write_text(render_clean_py(steps), encoding="utf-8")
+        (ctx.project.root / CLEAN_PY).write_text(
+            modality.render_clean_py(steps), encoding="utf-8"
+        )
         meta.update(
             {"splits": splits, "dropped_columns": drops, "split_seed": SPLIT_SEED}
         )

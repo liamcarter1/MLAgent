@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from mlagent.llm import FakeLLM
 from mlagent.stages.base import StageContext
 from mlagent.stages.codegen import CodegenStage, check_data, config_table
@@ -121,11 +123,11 @@ def test_unsupported_task_type_is_reported(clean_project):
     spec = clean_project.read_json("spec.json")
     spec["task_type"] = "image_classification"
     clean_project.write_json("spec.json", spec)
-    ctx, shown = make_ctx(clean_project, FakeLLM([]), [])
+    ctx, _shown = make_ctx(clean_project, FakeLLM([]), [])
     stage = CodegenStage()
-    stage.prepare(ctx)
+    with pytest.raises(ValueError, match="image_classification"):
+        stage.prepare(ctx)
     assert not stage.is_complete(ctx)
-    assert any("image_classification" in s for s in shown)
 
 
 def test_check_data_and_config_table(clean_project):

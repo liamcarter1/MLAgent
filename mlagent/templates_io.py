@@ -14,9 +14,11 @@ SCHEMA_FILE = "config_schema.json"
 TEMPLATE_FOR_TASK = {
     "tabular_classification": "tabular_sklearn",
     "tabular_regression": "tabular_sklearn",
+    "image_classification": "image_torch",
 }
 
 COMMON_DIRNAME = "common"
+IMAGE_COMMON_DIRNAME = "image_common"
 COMMON_DIR = TEMPLATES_DIR / COMMON_DIRNAME
 # Scripts copied verbatim into a project via copy_common(). `clean.py` also lives under
 # COMMON_DIR but is never copied as-is: cleaning.render_clean_py() reads it and
@@ -165,23 +167,39 @@ def copy_template(name: str, project_root: Path) -> list[Path]:
     return written
 
 
-def common_file(name: str) -> Path:
-    """Path to a shared template script (`profile.py`, `clean.py`)."""
-    path = COMMON_DIR / name
+def shared_file(relpath: str) -> Path:
+    """A shared template script by its path under `mlagent/templates`.
+
+    e.g. `"common/profile.py"`, `"image_common/clean.py"` -- what a `Modality` record's
+    `profile_template` and `clean_template` fields name.
+    """
+    path = TEMPLATES_DIR / relpath
     if not path.is_file():
-        raise FileNotFoundError(f"no common template named {name!r} under {COMMON_DIR}")
+        raise FileNotFoundError(f"no shared template at {relpath!r} under {TEMPLATES_DIR}")
     return path
+
+
+def copy_shared(relpath: str, project_root: Path, name: str | None = None) -> Path:
+    """Copy one shared script into the project, overwriting; return the written path.
+
+    The destination name defaults to the source's own filename, so both
+    `common/profile.py` and `image_common/profile.py` land as `profile.py`.
+    """
+    source = shared_file(relpath)
+    target = Path(project_root) / (name or source.name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    return target
+
+
+def common_file(name: str) -> Path:
+    """Path to a shared template script under `common/` (`profile.py`, `clean.py`)."""
+    return shared_file(f"{COMMON_DIRNAME}/{name}")
 
 
 def copy_common(names: Sequence[str], project_root: Path) -> list[Path]:
     """Copy shared scripts into the project folder, overwriting; return the paths."""
-    written: list[Path] = []
-    for filename in names:
-        target = Path(project_root) / filename
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(common_file(filename), target)
-        written.append(target)
-    return written
+    return [copy_shared(f"{COMMON_DIRNAME}/{name}", project_root) for name in names]
 
 
 def config_table(config: dict, schema: dict) -> str:

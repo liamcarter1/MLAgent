@@ -7,12 +7,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from mlagent.datasources.drive import list_candidates, load_table
-from mlagent.datasources.hf import load_tabular, search_datasets
+from mlagent.datasources.drive import list_candidates
+from mlagent.datasources.hf import search_datasets
+from mlagent.modality import modality_for
 from mlagent.profile import profile_markdown
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.synth.tabular import TARGET, SynthTabularConfig, generate
-from mlagent.templates_io import COMMON_FILES, copy_common
+from mlagent.templates_io import copy_shared
 
 RAW_FILE = "data.csv"
 META_FILE = "data_meta.json"
@@ -44,11 +45,12 @@ def guess_target(df: pd.DataFrame) -> str | None:
 class DataStage(ScriptStageBase):
     name = "data"
 
-    def __init__(self, search_roots=None, hf_search=search_datasets, hf_load=load_tabular):
+    def __init__(self, search_roots=None, hf_search=search_datasets, hf_load=None):
         self.search_roots = (
             list(search_roots) if search_roots is not None else list(DEFAULT_SEARCH_ROOTS)
         )
         self.hf_search = hf_search
+        # None means "whatever the task type's modality record says"; tests inject a fake.
         self.hf_load = hf_load
 
     def is_complete(self, ctx: StageContext) -> bool:
@@ -61,17 +63,14 @@ class DataStage(ScriptStageBase):
 
     def prepare(self, ctx: StageContext) -> Handoff:
         spec = ctx.spec()
-        if spec.task_type not in TABULAR_TASKS:
-            raise NotImplementedError(
-                f"{spec.task_type} data is not supported yet (image tasks arrive in Milestone 6)"
-            )
+        modality = modality_for(spec.task_type)
         ctx.teaching().preamble("data", {"spec": spec.to_dict()})
         if spec.data_source == "synthetic":
             df, target, meta = self._synthetic(ctx, TABULAR_TASKS[spec.task_type])
         elif spec.data_source == "drive":
-            df, target, meta = self._drive(ctx)
+            df, target, meta = self._drive(ctx, modality)
         else:
-            df, target, meta = self._huggingface(ctx)
+            df, target, meta = self._huggingface(ctx, modality)
 
         ctx.project.data_raw.mkdir(parents=True, exist_ok=True)
         path = ctx.project.data_raw / RAW_FILE
@@ -86,7 +85,7 @@ class DataStage(ScriptStageBase):
             }
         )
         ctx.project.write_json(META_FILE, meta)
-        copy_common(COMMON_FILES, ctx.project.root)
+        copy_shared(modality.profile_template, ctx.project.root)
         ctx.display(
             f"I saved {len(df)} rows and {df.shape[1]} columns to `data/raw/data.csv` and wrote "
             "`profile.py`, which measures the data and draws four figures. Run it in the next "
@@ -160,7 +159,7 @@ class DataStage(ScriptStageBase):
             key="data.target_column", default=guess,
         )
 
-    def _drive(self, ctx: StageContext):
+    def _drive(self, ctx: StageContext, modality):
         q = ctx.questioner
         candidates = list_candidates(self.search_roots)
         if candidates:
@@ -176,11 +175,11 @@ class DataStage(ScriptStageBase):
         path = Path(answer.strip())
         if not path.is_file():
             raise FileNotFoundError(f"no such file: {path}")
-        df = load_table(path)
+        df = modality.load_drive(path)
         target = self._ask_target(ctx, df)
         return df, target, {"source": "drive", "source_path": str(path)}
 
-    def _huggingface(self, ctx: StageContext):
+    def _huggingface(self, ctx: StageContext, modality):
         q = ctx.questioner
         results = []
         for _ in range(3):
@@ -198,6 +197,7 @@ class DataStage(ScriptStageBase):
         pick = q.choice("Which dataset?", labels, allow_other=False)
         chosen = results[labels.index(pick)]
         ctx.display(f"Downloading **{chosen.id}** from the HuggingFace Hub...")
-        df = self.hf_load(chosen.id)
+        loader = self.hf_load or modality.load_hf
+        df = loader(chosen.id)
         target = self._ask_target(ctx, df)
         return df, target, {"source": "huggingface", "hf_id": chosen.id}

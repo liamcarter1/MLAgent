@@ -9,6 +9,7 @@ import pandas as pd
 
 from mlagent import config as cfg
 from mlagent.llm import LLMError, ToolSpec
+from mlagent.modality import modality_for
 from mlagent.prompts_io import audience, load_prompt
 from mlagent.spec import Spec
 from mlagent.stages.base import StageContext
@@ -16,7 +17,6 @@ from mlagent.stages.data import META_FILE
 from mlagent.teaching import material
 from mlagent.templates_io import (
     CODE_FILES,
-    TEMPLATE_FOR_TASK,
     coerce_config,
     config_table,
     copy_template,
@@ -132,7 +132,7 @@ class CodegenStage:
             return False
         try:
             spec = ctx.spec()
-            schema = load_schema(TEMPLATE_FOR_TASK[spec.task_type])
+            schema = load_schema(modality_for(spec.task_type).template_family)
             flat = schema_for(schema, str(config.get("model_type", "")))
         except Exception:  # noqa: BLE001 - missing spec, unknown model or task: not complete
             return False
@@ -140,13 +140,7 @@ class CodegenStage:
 
     def prepare(self, ctx: StageContext) -> None:
         spec = ctx.spec()
-        template = TEMPLATE_FOR_TASK.get(spec.task_type)
-        if template is None:
-            ctx.display(
-                f"No training template for task type `{spec.task_type}` yet; "
-                "this milestone covers tabular tasks only."
-            )
-            return None
+        template = modality_for(spec.task_type).template_family
         meta = ctx.project.read_json(META_FILE) or {}
         problems = check_data(meta, ctx.project.root)
         if problems:

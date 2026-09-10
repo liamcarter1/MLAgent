@@ -170,3 +170,28 @@ def test_config_table_lists_every_key_with_its_description():
     table = config_table(config, flat)
     assert table.startswith("| key | value | what it does |")
     assert "| learning_rate | 0.1 |" in table and "| max_depth | none |" in table
+
+
+def test_shared_file_and_copy_shared_round_trip(tmp_path):
+    from mlagent.templates_io import copy_shared, shared_file
+
+    assert shared_file("common/profile.py").is_file()
+    written = copy_shared("common/profile.py", tmp_path)
+    assert written == tmp_path / "profile.py"
+    assert "SCRIPT_NAME" in written.read_text(encoding="utf-8")
+
+
+def test_copy_shared_can_rename_the_destination(tmp_path):
+    from mlagent.templates_io import copy_shared
+
+    written = copy_shared("common/profile.py", tmp_path, name="profile.py")
+    assert written.name == "profile.py"
+
+
+def test_shared_file_rejects_a_missing_path():
+    import pytest
+
+    from mlagent.templates_io import shared_file
+
+    with pytest.raises(FileNotFoundError):
+        shared_file("common/nope.py")
