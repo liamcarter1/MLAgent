@@ -176,12 +176,6 @@ def test_huggingface_blank_query_form_value_asks_instead_of_searching_empty(proj
     assert project.read_json(META_FILE)["hf_id"] == "org/churn"
 
 
-def test_image_task_is_not_supported_yet(project):
-    ctx, _shown, _figures = make_ctx(project, [], task="image_classification")
-    with pytest.raises(ValueError, match="image_classification"):
-        DataStage().prepare(ctx)
-
-
 def test_llm_failure_still_completes(project):
     ctx, shown, _figures = make_ctx(project, ["100", "3", "2", "0.5", "0.0", "n"],
                                     llm=FakeLLM([]))
@@ -217,3 +211,114 @@ def test_missing_profile_debrief_says_so_and_stays_incomplete(project):
     stage.debrief(ctx)
     assert not stage.is_complete(ctx)
     assert any("profile.py" in s for s in shown)
+
+
+def make_image_ctx(project, answers):
+    from mlagent.llm import FakeLLM
+    from mlagent.stages.base import StageContext
+    from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
+
+    shown: list[str] = []
+    project.write_json("spec.json", {
+        "goal": "classify shapes", "task_type": "image_classification", "metric": "accuracy",
+        "target_value": 0.9, "data_source": "synthetic", "minutes_per_run": 5,
+        "max_rounds": 3, "gpu": "T4", "notes": "",
+    })
+    ctx = StageContext(
+        project=project, llm=FakeLLM([]),
+        questioner=FormQuestioner(answers, ScriptedQuestioner([])),
+        explainer=None, display=shown.append,
+        display_figure=lambda path, caption="": None,
+    )
+    return ctx, shown
+
+
+def test_image_synthetic_writes_the_npz_pair_and_the_image_meta(project):
+    from mlagent.imageset import read_pair
+    from mlagent.stages.data import DataStage
+
+    ctx, _shown = make_image_ctx(project, {
+        "data.n_images": 40, "data.image_size": 32, "data.n_classes": 3,
+        "data.noise": 0.1, "data.inject_quirks": True,
+    })
+    handoff = DataStage().prepare(ctx)
+
+    assert handoff.commands == [["profile.py"]]
+    assert handoff.outputs == ["profile_raw.json"]
+    assert (project.root / "profile.py").exists()
+    imageset = read_pair(project.data_raw)
+    assert imageset.n_images == 40 and imageset.image_size == 32
+
+    meta = project.read_json("data_meta.json")
+    assert meta["target"] == "label"
+    assert meta["modality"] == "image"
+    assert meta["task_type"] == "image_classification"
+    assert meta["source"] == "synthetic"
+    assert meta["raw_path"] == "data/raw/data.npz"
+    assert meta["raw_n_rows"] == 40
+    assert meta["raw_n_cols"] == 32 * 32 * 3
+    assert meta["image_size"] == 32
+    assert meta["n_channels"] == 3
+    assert meta["class_labels"] == imageset.class_names
+    assert meta["skipped_files"] == []
+
+
+def test_the_image_profile_template_is_the_one_copied(project):
+    from mlagent.stages.data import DataStage
+
+    ctx, _shown = make_image_ctx(project, {
+        "data.n_images": 20, "data.image_size": 32, "data.n_classes": 2,
+        "data.noise": 0.0, "data.inject_quirks": False,
+    })
+    DataStage().prepare(ctx)
+    source = (project.root / "profile.py").read_text(encoding="utf-8")
+    assert "Profile an image dataset" in source
+
+
+def test_image_drive_source_records_the_skipped_files(project, tmp_path):
+    from PIL import Image
+
+    from mlagent.stages.data import DataStage
+
+    folder = tmp_path / "pics"
+    for cls in ("cats", "dogs"):
+        for i in range(6):
+            path = folder / cls / f"{i}.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (20, 20), (10 * i, 60, 90)).save(path)
+    (folder / "stray.png").write_bytes(b"")
+
+    ctx, _shown = make_image_ctx(project, {
+        "data.drive_folder": str(folder), "data.image_size": 32, "data.max_images": 0,
+    })
+    ctx.project.write_json("spec.json", {**ctx.project.read_json("spec.json"),
+                                         "data_source": "drive"})
+    DataStage().prepare(ctx)
+    meta = project.read_json("data_meta.json")
+    assert meta["source"] == "drive"
+    assert meta["source_path"] == str(folder)
+    assert meta["raw_n_rows"] == 12
+    assert any(reason == "no class folder" for _path, reason in meta["skipped_files"])
+
+
+def test_image_huggingface_source_uses_the_injected_loader(project):
+    from mlagent.stages.data import DataStage
+    from mlagent.synth.images import SynthImageConfig, generate
+
+    fake = generate(SynthImageConfig(n_images=18, image_size=32, n_classes=2, seed=2))
+    calls = []
+
+    def loader(dataset_id, image_size, split="train", max_images=None, **kwargs):
+        calls.append((dataset_id, image_size, max_images))
+        return fake
+
+    ctx, _shown = make_image_ctx(project, {
+        "data.hf_dataset": "acme/shapes", "data.image_size": 32, "data.max_images": 500,
+    })
+    ctx.project.write_json("spec.json", {**ctx.project.read_json("spec.json"),
+                                         "data_source": "huggingface"})
+    DataStage(hf_image_load=loader).prepare(ctx)
+    assert calls == [("acme/shapes", 32, 500)]
+    meta = project.read_json("data_meta.json")
+    assert meta["source"] == "huggingface" and meta["hf_id"] == "acme/shapes"
+    assert meta["raw_n_rows"] == 18

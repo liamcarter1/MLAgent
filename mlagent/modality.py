@@ -1,10 +1,12 @@
 """What a stage needs to know to treat one kind of data uniformly.
 
-`DataStage`, `CleanStage` and `CodegenStage` never import `synth.tabular`,
-`datasources.drive`, `datasources.hf`, `audit` or `cleaning` directly: they look up a
-`Modality` record by task type and call its callables. Adding a modality is adding a
-record here plus the modules it points at, never an `if task_type == ...` branch
-scattered through the stages.
+`DataStage` and `CleanStage` look up a `Modality` record by task type and call its
+callables rather than branching on task type themselves. The one exception: each stage's
+synthetic-data path (`DataStage._synthetic` / `_image_synthetic`) calls
+`synth.tabular.generate` / `synth.images.generate` directly, since which one runs is
+already decided by which branch (tabular vs. image) called it. Adding a modality is
+adding a record here plus the modules it points at, never an `if task_type == ...`
+branch scattered through the stages.
 
 `TEMPLATE_FOR_TASK` stays a literal dict in `templates_io.py` (this module imports
 `cleaning`, which imports `templates_io`, so building it here would be circular);
@@ -19,8 +21,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from mlagent import audit, cleaning
-from mlagent.datasources import drive, hf
+from mlagent import audit, audit_images, cleaning, cleaning_images
+from mlagent.datasources import drive, drive_images, hf, hf_images
+from mlagent.imageset import RAW_FILE as IMAGE_RAW_FILE
+from mlagent.imageset import read_pair, write_pair
+from mlagent.synth import images as synth_images
 from mlagent.synth import tabular
 
 TABULAR_RAW_FILE = "data.csv"
@@ -77,7 +82,26 @@ TABULAR = Modality(
     read=_read_table,
 )
 
-MODALITIES: tuple[Modality, ...] = (TABULAR,)
+IMAGE = Modality(
+    name="image",
+    task_types=("image_classification",),
+    data_file=IMAGE_RAW_FILE,
+    profile_template="image_common/profile.py",
+    clean_template="image_common/clean.py",
+    template_family="image_torch",
+    teaching_material="model_choices_images",
+    profile_figures=("thumbnails", "class_balance", "intensity", "class_means"),
+    generate=synth_images.generate,
+    load_drive=drive_images.load_folder,
+    load_hf=hf_images.load_image_dataset,
+    audit=audit_images.audit_images,
+    apply_steps=cleaning_images.apply_steps,
+    render_clean_py=cleaning_images.render_clean_py,
+    write_raw=lambda imageset, directory: write_pair(imageset, directory)[0],
+    read=read_pair,
+)
+
+MODALITIES: tuple[Modality, ...] = (TABULAR, IMAGE)
 
 
 def modality_for(task_type: str) -> Modality:

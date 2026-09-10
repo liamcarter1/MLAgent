@@ -248,3 +248,87 @@ def test_debrief_without_the_clean_csv_says_so(project):
     stage.debrief(ctx)
     assert not stage.is_complete(ctx)
     assert any("clean.py" in s for s in shown)
+
+
+def image_ctx(project, answers=(), form=None):
+    from mlagent.llm import FakeLLM
+    from mlagent.stages.base import StageContext
+    from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
+
+    shown: list[str] = []
+    scripted = ScriptedQuestioner(list(answers))
+    questioner = FormQuestioner(form or {}, scripted) if form is not None else scripted
+    ctx = StageContext(project=project, llm=FakeLLM([]), questioner=questioner,
+                       explainer=None, display=shown.append,
+                       display_figure=lambda path, caption="": None)
+    return ctx, shown
+
+
+def test_image_clean_prepare_writes_the_audit_and_an_image_clean_py(project):
+    from mlagent.imageset import write_pair
+    from mlagent.stages.clean import CleanStage
+    from mlagent.synth.images import SynthImageConfig, generate
+
+    imageset = generate(SynthImageConfig(n_images=40, image_size=32, n_classes=2, seed=3,
+                                         duplicate_fraction=0.2, blank_fraction=0.1))
+    write_pair(imageset, project.data_raw)
+    project.write_json("data_meta.json", {
+        "target": "label", "task_type": "image_classification", "modality": "image",
+        "source": "synthetic", "raw_path": "data/raw/data.npz", "raw_n_rows": 40,
+        "raw_n_cols": 32 * 32 * 3, "image_size": 32, "n_channels": 3,
+        "class_labels": list(imageset.class_names), "n_classes": 2, "skipped_files": [],
+    })
+    project.write_json("spec.json", {
+        "goal": "shapes", "task_type": "image_classification", "metric": "accuracy",
+        "target_value": 0.9, "data_source": "synthetic", "minutes_per_run": 5,
+        "max_rounds": 3, "gpu": "none", "notes": "",
+    })
+    ctx, _shown = image_ctx(project, answers=["y"] * 10,
+                            form={"clean.train_fraction": 0.7, "clean.val_fraction": 0.15})
+    handoff = CleanStage().prepare(ctx)
+
+    assert handoff.commands == [["clean.py"]]
+    assert handoff.outputs == ["data/clean/data.npz", "profile_clean.json"]
+    audit = project.read_json("audit.json")
+    assert {i["kind"] for i in audit["issues"]} & {"duplicate_images", "blank_images"}
+    assert all(s["op"] == "drop_indices" for s in audit["steps"])
+    source = (project.root / "clean.py").read_text(encoding="utf-8")
+    assert "Apply the image drops you approved" in source
+    meta = project.read_json("data_meta.json")
+    assert meta["dropped_columns"] == [] and meta["split_seed"] == 42
+
+
+def test_image_clean_debrief_completes_the_meta(clean_image_project):
+    from mlagent.stages.clean import CleanStage
+
+    project = clean_image_project
+    project.write_json("profile_clean.json", {
+        "before": {"n_images": 60, "class_counts": {"circle": 20, "cross": 20, "square": 20}},
+        "after": {"n_images": 58, "class_counts": {"circle": 19, "cross": 20, "square": 19}},
+        "steps": [], "figures": ["clean_before_after_classes.png"],
+    })
+    ctx, shown = image_ctx(project)
+    CleanStage().debrief(ctx)
+    meta = project.read_json("data_meta.json")
+    assert meta["clean_path"] == "data/clean/data.npz"
+    assert meta["clean_n_rows"] == 60
+    assert meta["clean_n_cols"] == 32 * 32 * 3
+    assert meta["feature_columns"] == [] and meta["categorical_columns"] == []
+    assert meta["n_classes"] == 3
+    assert meta["class_labels"] == ["circle", "square", "triangle"]
+    assert any("58" in text or "Cleaning summary" in text for text in shown)
+
+
+def test_image_clean_debrief_reports_an_emptied_class_as_an_error(clean_image_project):
+    from mlagent.imageset import read_pair, write_pair
+    from mlagent.stages.clean import CleanStage
+
+    project = clean_image_project
+    imageset = read_pair(project.data_clean)
+    keep = [i for i, label in enumerate(imageset.labels.tolist()) if label != 0]
+    write_pair(imageset.take(keep), project.data_clean)
+    ctx, shown = image_ctx(project)
+    CleanStage().debrief(ctx)
+    joined = "\n".join(shown)
+    assert "no images left" in joined
+    assert imageset.class_names[0] in joined

@@ -48,15 +48,45 @@ def test_the_tabular_record_writes_and_reads_a_csv(tmp_path):
 
 def test_template_for_task_agrees_with_the_registry():
     # TEMPLATE_FOR_TASK is a literal dict (see mlagent/modality.py's module docstring for
-    # why) and may name a task type — "image_classification" — before that modality's
-    # record is registered in MODALITIES; every task type the registry *does* know about
-    # must still agree with it.
-    for modality in MODALITIES:
-        for task in modality.task_types:
-            assert TEMPLATE_FOR_TASK[task] == modality.template_family
+    # why); now that every modality it names is registered, the two must agree exactly.
+    assert TEMPLATE_FOR_TASK == {t: m.template_family for m in MODALITIES for t in m.task_types}
 
 
 def test_the_record_is_frozen():
     with pytest.raises(AttributeError):
         TABULAR.name = "other"
     assert isinstance(TABULAR, Modality)
+
+
+def test_the_image_record_is_registered_and_points_at_the_image_modules():
+    from mlagent import audit_images, cleaning_images
+    from mlagent.datasources import drive_images, hf_images
+    from mlagent.modality import IMAGE, MODALITIES
+    from mlagent.synth import images as synth_images
+
+    assert MODALITIES == (TABULAR, IMAGE)
+    assert modality_for("image_classification") is IMAGE
+    assert IMAGE.name == "image"
+    assert IMAGE.data_file == "data.npz"
+    assert IMAGE.template_family == "image_torch"
+    assert IMAGE.profile_template == "image_common/profile.py"
+    assert IMAGE.clean_template == "image_common/clean.py"
+    assert IMAGE.teaching_material == "model_choices_images"
+    assert IMAGE.profile_figures == ("thumbnails", "class_balance", "intensity", "class_means")
+    assert IMAGE.generate is synth_images.generate
+    assert IMAGE.load_drive is drive_images.load_folder
+    assert IMAGE.load_hf is hf_images.load_image_dataset
+    assert IMAGE.audit is audit_images.audit_images
+    assert IMAGE.apply_steps is cleaning_images.apply_steps
+    assert IMAGE.render_clean_py is cleaning_images.render_clean_py
+
+
+def test_the_image_record_writes_and_reads_the_npz_pair(tmp_path):
+    from mlagent.modality import IMAGE
+    from mlagent.synth.images import SynthImageConfig, generate
+
+    s = generate(SynthImageConfig(n_images=12, image_size=32, n_classes=2, seed=1))
+    IMAGE.write_raw(s, tmp_path)
+    assert (tmp_path / "data.npz").exists() and (tmp_path / "manifest.csv").exists()
+    back = IMAGE.read(tmp_path)
+    assert back.n_images == 12 and back.class_names == s.class_names

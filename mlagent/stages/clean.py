@@ -9,6 +9,7 @@ from pandas.api import types as ptypes
 
 from mlagent.audit import Issue
 from mlagent.cleaning import describe_step
+from mlagent.cleaning_images import describe_step as describe_image_step
 from mlagent.llm import LLMError, ask_text
 from mlagent.modality import modality_for
 from mlagent.profile import profile_dataframe
@@ -18,6 +19,8 @@ from mlagent.stages.data import META_FILE, RAW_FILE
 
 CLEAN_FILE = "data.csv"
 CLEAN_REL_PATH = "data/clean/data.csv"
+CLEAN_IMAGE_FILE = "data.npz"
+CLEAN_IMAGE_REL_PATH = "data/clean/data.npz"
 AUDIT_FILE = "audit.json"
 PROFILE_CLEAN_FILE = "profile_clean.json"
 CLEAN_PY = "clean.py"
@@ -32,11 +35,13 @@ class CleanStage(ScriptStageBase):
 
     def is_complete(self, ctx: StageContext) -> bool:
         meta = ctx.project.read_json(META_FILE) or {}
+        image = meta.get("modality") == "image"
+        clean_file = CLEAN_IMAGE_FILE if image else CLEAN_FILE
         return (
-            (ctx.project.data_clean / CLEAN_FILE).exists()
+            (ctx.project.data_clean / clean_file).exists()
             and ctx.project.exists(AUDIT_FILE)
             and bool(meta.get("splits"))
-            and bool(meta.get("feature_columns"))
+            and (image or bool(meta.get("feature_columns")))
         )
 
     def prepare(self, ctx: StageContext) -> Handoff:
@@ -44,9 +49,12 @@ class CleanStage(ScriptStageBase):
         target = meta.get("target")
         if not target:
             raise RuntimeError("data_meta.json has no target; run the data stage first")
+        modality = modality_for(str(meta.get("task_type") or ctx.spec().task_type))
+        if modality.name == "image":
+            return self._prepare_images(ctx, modality, meta)
+
         df = pd.read_csv(ctx.project.data_raw / RAW_FILE)
         before = profile_dataframe(df, target)
-        modality = modality_for(str(meta.get("task_type") or ctx.spec().task_type))
 
         ctx.teaching().preamble("clean", {"target": target, "n_rows": int(len(df))})
         issues = modality.audit(df, target)
@@ -83,7 +91,46 @@ class CleanStage(ScriptStageBase):
             outputs=[CLEAN_REL_PATH, PROFILE_CLEAN_FILE],
         )
 
+    def _prepare_images(self, ctx: StageContext, modality, meta: dict) -> Handoff:
+        imageset = modality.read(ctx.project.data_raw)
+        ctx.teaching().preamble(
+            "clean", {"target": meta.get("target"), "n_rows": imageset.n_images}
+        )
+        skipped = [tuple(pair) for pair in (meta.get("skipped_files") or [])]
+        issues = modality.audit(imageset, meta, skipped)
+        decisions = self._review_issues(ctx, issues, {
+            "n_rows": imageset.n_images,
+            "n_cols": len(imageset.class_names),
+            "target": meta.get("target"),
+        })
+        steps = self._collect_steps(decisions)
+        splits = self._ask_splits(ctx)
+
+        ctx.project.write_json(
+            AUDIT_FILE,
+            {"issues": [i.to_dict() for i in issues], "decisions": decisions, "steps": steps},
+        )
+        (ctx.project.root / CLEAN_PY).write_text(
+            modality.render_clean_py(steps), encoding="utf-8"
+        )
+        meta.update({"splits": splits, "dropped_columns": [], "split_seed": SPLIT_SEED})
+        ctx.project.write_json(META_FILE, meta)
+
+        listed = "\n".join(f"- {describe_image_step(s)}" for s in steps) or "- (no changes)"
+        ctx.display(
+            f"I wrote `clean.py` with {len(steps)} step(s):\n\n{listed}\n\n"
+            "Run it in the next cell. It reads `data/raw/data.npz`, writes "
+            "`data/clean/data.npz`, and never touches the raw images -- so if you change "
+            "your mind you can edit `STEPS` in `clean.py` and run it again."
+        )
+        return Handoff(stage=self.name, commands=[[CLEAN_PY]],
+                       outputs=[CLEAN_IMAGE_REL_PATH, PROFILE_CLEAN_FILE])
+
     def debrief(self, ctx: StageContext) -> None:
+        meta = ctx.project.read_json(META_FILE) or {}
+        if meta.get("modality") == "image":
+            return self._debrief_images(ctx, meta)
+
         clean_path = ctx.project.data_clean / CLEAN_FILE
         if not clean_path.exists():
             ctx.display(
@@ -91,7 +138,6 @@ class CleanStage(ScriptStageBase):
                 "cell again."
             )
             return
-        meta = ctx.project.read_json(META_FILE) or {}
         target = str(meta.get("target"))
         cleaned = pd.read_csv(clean_path)
         feature_columns = [str(c) for c in cleaned.columns if c != target]
@@ -127,13 +173,70 @@ class CleanStage(ScriptStageBase):
         if note:
             ctx.display(note)
 
+    def _debrief_images(self, ctx: StageContext, meta: dict) -> None:
+        clean_path = ctx.project.data_clean / CLEAN_IMAGE_FILE
+        if not clean_path.exists():
+            ctx.display(
+                "I can't see `data/clean/data.npz` yet. Run the `clean.py` cell, then run "
+                "this cell again."
+            )
+            return
+        modality = modality_for(str(meta.get("task_type")))
+        cleaned = modality.read(ctx.project.data_clean)
+        counts = cleaned.class_counts()
+        empty = [name for name, n in counts.items() if n == 0]
+        if empty:
+            ctx.display(
+                f"Cleaning removed every image of {', '.join(empty)}, so those classes have "
+                "no images left. Edit `STEPS` in `clean.py` to keep some of them and run "
+                "the cell again, or redo the clean stage and decline that fix."
+            )
+            return
+        meta.update({
+            "clean_path": CLEAN_IMAGE_REL_PATH,
+            "clean_n_rows": cleaned.n_images,
+            "clean_n_cols": cleaned.image_size * cleaned.image_size * cleaned.n_channels,
+            "feature_columns": [],
+            "categorical_columns": [],
+            "n_classes": len(cleaned.class_names),
+            "class_labels": list(cleaned.class_names),
+        })
+        ctx.project.write_json(META_FILE, meta)
+
+        profile = ctx.project.read_json(PROFILE_CLEAN_FILE) or {}
+        figures = [ctx.project.plots_dir / str(n) for n in (profile.get("figures") or [])]
+        before = profile.get("before") or {}
+        after = profile.get("after") or {}
+        splits = meta.get("splits") or {}
+        ctx.display("\n".join([
+            "### Cleaning summary",
+            "",
+            f"- Images: {before.get('n_images', '?')} -> {after.get('n_images', '?')}",
+            f"- Classes: {', '.join(f'{k} {v}' for k, v in counts.items())}",
+            f"- Steps applied: {len(profile.get('steps') or [])}",
+            "",
+            f"Splits frozen at train {splits.get('train')}, validation {splits.get('val')}, "
+            f"test {splits.get('test')} with seed {meta.get('split_seed', SPLIT_SEED)}, so "
+            "every run sees the same images. Next: choosing a model and generating the "
+            "[[training pipeline]].",
+        ]))
+        note = ctx.teaching().debrief(
+            "clean_debrief",
+            {"before": before, "after": after, "steps": profile.get("steps"),
+             "splits": splits},
+            figures, fallback="",
+        )
+        if note:
+            ctx.display(note)
+
     def _collect_steps(self, decisions: list[dict]) -> list[dict]:
         """Approved fixes become steps, unless the fix's column was itself dropped by
         another approved fix; those are recorded as skipped so decisions stay meaningful."""
         dropped_cols: set[str] = set()
         for d in decisions:
-            if d["approved"] and d["fix"] and d["fix"]["op"] == "drop_columns":
-                dropped_cols.update(d["fix"]["params"].get("columns", []))
+            fix = d["fix"]
+            if d["approved"] and fix and fix.get("op") == "drop_columns":
+                dropped_cols.update(fix["params"].get("columns", []))
         steps: list[dict] = []
         for d in decisions:
             if not d["approved"] or not d["fix"]:

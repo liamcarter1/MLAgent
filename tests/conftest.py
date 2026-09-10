@@ -91,6 +91,59 @@ def regression_project(project: Project) -> Project:
     return write_clean_project(project, "tabular_regression")
 
 
+def write_clean_image_project(
+    project: Project, n_images: int = 60, image_size: int = 32, n_classes: int = 3
+) -> Project:
+    """Write data/clean/data.npz + manifest.csv, data_meta.json and spec.json as the
+    image clean stage leaves them."""
+    from mlagent.imageset import write_pair
+    from mlagent.synth.images import SynthImageConfig, generate
+
+    imageset = generate(SynthImageConfig(n_images=n_images, image_size=image_size,
+                                         n_classes=n_classes, seed=8, noise=0.05))
+    project.ensure_dirs()
+    write_pair(imageset, project.data_raw)
+    write_pair(imageset, project.data_clean)
+    project.write_json("data_meta.json", {
+        "target": "label",
+        "task_type": "image_classification",
+        "modality": "image",
+        "source": "synthetic",
+        "raw_path": "data/raw/data.npz",
+        "raw_n_rows": imageset.n_images,
+        "raw_n_cols": image_size * image_size * 3,
+        "clean_path": "data/clean/data.npz",
+        "clean_n_rows": imageset.n_images,
+        "clean_n_cols": image_size * image_size * 3,
+        "dropped_columns": [],
+        "feature_columns": [],
+        "categorical_columns": [],
+        "splits": {"train": 0.7, "val": 0.15, "test": 0.15},
+        "split_seed": 42,
+        "image_size": image_size,
+        "n_channels": 3,
+        "n_classes": n_classes,
+        "class_labels": list(imageset.class_names),
+    })
+    project.write_json("spec.json", {
+        "goal": "image fixture project",
+        "task_type": "image_classification",
+        "metric": "accuracy",
+        "target_value": 0.8,
+        "data_source": "synthetic",
+        "minutes_per_run": 5,
+        "max_rounds": 3,
+        "gpu": "none",
+        "notes": "",
+    })
+    return project
+
+
+@pytest.fixture
+def clean_image_project(project: Project) -> Project:
+    return write_clean_image_project(project)
+
+
 import subprocess  # noqa: E402
 import sys  # noqa: E402
 
