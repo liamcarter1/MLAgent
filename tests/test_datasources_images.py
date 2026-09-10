@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -138,4 +140,47 @@ def test_a_dataset_with_no_image_column_raises():
     ds = FakeDataset([{"text": "hi", "label": 0}], {"text": object(),
                                                     "label": FakeClassLabel(["x"])})
     with pytest.raises(ValueError, match="image column"):
+        load_image_dataset("x/y", image_size=8, loader=lambda *a, **k: ds)
+
+
+def fake_int_label_dataset(values):
+    """No `ClassLabel`-style `.names` on the label feature, just plain int values."""
+    rows = [
+        {"image": Image.new("RGB", (10, 10), (i % 256, 50, 50)), "label": v}
+        for i, v in enumerate(values)
+    ]
+    return FakeDataset(rows, {"image": FakeImageFeature(), "label": object()})
+
+
+def test_int_labels_without_class_label_names_are_mapped_through_a_numeric_index():
+    ds = fake_int_label_dataset([3, 4, 5, 4, 3])
+    imageset = load_image_dataset("x/y", image_size=8, loader=lambda *a, **k: ds)
+    imageset.validate()
+    assert imageset.class_names == ["3", "4", "5"]
+    assert imageset.labels.tolist() == [0, 1, 2, 1, 0]
+
+
+def test_ten_or_more_int_classes_sort_numerically_not_lexicographically():
+    ds = fake_int_label_dataset(list(range(12)))
+    imageset = load_image_dataset("x/y", image_size=8, loader=lambda *a, **k: ds)
+    imageset.validate()
+    assert imageset.class_names[2] == "2"
+    assert imageset.class_names[10] == "10"
+    assert imageset.labels.tolist() == list(range(12))
+
+
+def test_a_dict_with_raw_image_bytes_decodes():
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), (5, 5, 5)).save(buf, format="PNG")
+    rows = [{"image": {"bytes": buf.getvalue()}, "label": 0}]
+    ds = FakeDataset(rows, {"image": FakeImageFeature(), "label": FakeClassLabel(["a"])})
+    imageset = load_image_dataset("x/y", image_size=8, loader=lambda *a, **k: ds)
+    imageset.validate()
+    assert imageset.n_images == 1
+
+
+def test_an_undecodable_image_value_raises_naming_the_row_and_column():
+    rows = [{"image": 12345, "label": 0}]
+    ds = FakeDataset(rows, {"image": FakeImageFeature(), "label": FakeClassLabel(["a"])})
+    with pytest.raises(ValueError, match="row 0.*'image'"):
         load_image_dataset("x/y", image_size=8, loader=lambda *a, **k: ds)
