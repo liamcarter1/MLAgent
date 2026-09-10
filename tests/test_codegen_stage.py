@@ -119,13 +119,13 @@ def test_bad_data_stops_stage_without_writing(clean_project):
     assert any("nope" in s for s in shown)
 
 
-def test_unsupported_task_type_is_reported(clean_project):
+def test_unregistered_task_type_is_reported(clean_project):
     spec = clean_project.read_json("spec.json")
-    spec["task_type"] = "image_classification"
+    spec["task_type"] = "audio_classification"
     clean_project.write_json("spec.json", spec)
     ctx, _shown = make_ctx(clean_project, FakeLLM([]), [])
     stage = CodegenStage()
-    with pytest.raises(ValueError, match="image_classification"):
+    with pytest.raises(ValueError, match="audio_classification"):
         stage.prepare(ctx)
     assert not stage.is_complete(ctx)
 

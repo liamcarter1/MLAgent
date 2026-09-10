@@ -298,6 +298,37 @@ def test_image_clean_prepare_writes_the_audit_and_an_image_clean_py(project):
     assert meta["dropped_columns"] == [] and meta["split_seed"] == 42
 
 
+def test_image_clean_report_card_payload_uses_image_shaped_counts(project):
+    from mlagent.imageset import write_pair
+    from mlagent.stages.clean import CleanStage
+    from mlagent.synth.images import SynthImageConfig, generate
+
+    imageset = generate(SynthImageConfig(n_images=40, image_size=32, n_classes=2, seed=3,
+                                         duplicate_fraction=0.2, blank_fraction=0.1))
+    write_pair(imageset, project.data_raw)
+    project.write_json("data_meta.json", {
+        "target": "label", "task_type": "image_classification", "modality": "image",
+        "source": "synthetic", "raw_path": "data/raw/data.npz", "raw_n_rows": 40,
+        "raw_n_cols": 32 * 32 * 3, "image_size": 32, "n_channels": 3,
+        "class_labels": list(imageset.class_names), "n_classes": 2, "skipped_files": [],
+    })
+    project.write_json("spec.json", {
+        "goal": "shapes", "task_type": "image_classification", "metric": "accuracy",
+        "target_value": 0.9, "data_source": "synthetic", "minutes_per_run": 5,
+        "max_rounds": 3, "gpu": "none", "notes": "",
+    })
+    ctx, _shown = image_ctx(project, answers=["y"] * 10,
+                            form={"clean.train_fraction": 0.7, "clean.val_fraction": 0.15})
+    CleanStage().prepare(ctx)
+
+    payload = json.loads(ctx.llm.calls[-1]["messages"][0]["content"])
+    summary = payload["profile_summary"]
+    assert summary["n_rows"] == 40
+    assert summary["n_cols"] == 32 * 32 * 3
+    assert summary["n_classes"] == 2
+    assert summary["image_size"] == 32
+
+
 def test_image_clean_debrief_completes_the_meta(clean_image_project):
     from mlagent.stages.clean import CleanStage
 

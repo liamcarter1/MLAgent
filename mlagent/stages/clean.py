@@ -100,7 +100,12 @@ class CleanStage(ScriptStageBase):
         issues = modality.audit(imageset, meta, skipped)
         decisions = self._review_issues(ctx, issues, {
             "n_rows": imageset.n_images,
-            "n_cols": len(imageset.class_names),
+            # Pixel values per image (matches data_meta's raw_n_cols), not the class
+            # count -- _explain indexes "n_cols" directly and a tabular-shaped label
+            # ("N columns") would misdescribe an image dataset to the reader.
+            "n_cols": imageset.image_size * imageset.image_size * imageset.n_channels,
+            "n_classes": len(imageset.class_names),
+            "image_size": imageset.image_size,
             "target": meta.get("target"),
         })
         steps = self._collect_steps(decisions)
@@ -275,15 +280,22 @@ class CleanStage(ScriptStageBase):
         return decisions
 
     def _explain(self, ctx: StageContext, issues: list[Issue], profile: dict) -> None:
+        summary = {
+            "n_rows": profile["n_rows"],
+            "n_cols": profile["n_cols"],
+            "target": profile.get("target"),
+        }
+        # Image profiles add these so the report card doesn't call an image count of
+        # classes a count of columns; absent for a tabular profile.
+        if "n_classes" in profile:
+            summary["n_classes"] = profile["n_classes"]
+        if "image_size" in profile:
+            summary["image_size"] = profile["image_size"]
         payload = json.dumps(
             {
                 "issues": [i.to_dict() for i in issues],
                 "spec": ctx.spec().to_dict(),
-                "profile_summary": {
-                    "n_rows": profile["n_rows"],
-                    "n_cols": profile["n_cols"],
-                    "target": profile.get("target"),
-                },
+                "profile_summary": summary,
             },
             indent=2,
             default=str,
