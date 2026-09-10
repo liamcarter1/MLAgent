@@ -1,0 +1,37 @@
+{
+  "common": {
+    "model_type": {"type": "choice", "default": "small_cnn",
+      "choices": ["tiny_cnn", "small_cnn", "resnet18"],
+      "description": "Which network to train."},
+    "epochs": {"type": "integer", "default": 10, "min": 1, "max": 50,
+      "description": "Number of passes over the training images."},
+    "batch_size": {"type": "integer", "default": 32, "min": 8, "max": 256,
+      "description": "How many images the network looks at before each weight update."},
+    "learning_rate": {"type": "number", "default": 0.001, "min": 0.00001, "max": 0.1,
+      "description": "Step size for each weight update; too high and the loss jumps about."},
+    "weight_decay": {"type": "number", "default": 0.0001, "min": 0.0, "max": 0.1,
+      "description": "Penalty on large weights; higher values regularise."},
+    "early_stopping_patience": {"type": "integer", "default": 5, "min": 0, "max": 50,
+      "description": "Stop when validation has not improved for this many epochs; 0 disables."},
+    "seed": {"type": "integer", "default": 42, "min": 0, "max": 1000000,
+      "description": "Random seed for the model (the data split has its own frozen seed)."},
+    "augment": {"type": "choice", "default": "basic", "choices": ["none", "basic"],
+      "description": "Randomly flip and shift training images so the model sees more variety."}
+  },
+  "models": {
+    "tiny_cnn": {
+      "dropout": {"type": "number", "default": 0.3, "min": 0.0, "max": 0.7,
+        "description": "Fraction of activations dropped during training; higher regularises."}
+    },
+    "small_cnn": {
+      "dropout": {"type": "number", "default": 0.3, "min": 0.0, "max": 0.7,
+        "description": "Fraction of activations dropped during training; higher regularises."}
+    },
+    "resnet18": {
+      "pretrained": {"type": "choice", "default": "imagenet", "choices": ["imagenet", "none"],
+        "description": "Start from ImageNet weights (needs the network) or from scratch."},
+      "freeze_backbone": {"type": "choice", "default": "no", "choices": ["yes", "no"],
+        "description": "Train only the final layer, keeping the pretrained features fixed."}
+    }
+  }
+}
