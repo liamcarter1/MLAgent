@@ -24,6 +24,22 @@ CAPTIONS: dict[str, str] = {
         "a model can score well just by always predicting the biggest class, so accuracy alone "
         "will flatter it."
     ),
+    "thumbnails": (
+        "A few example images from each class, labelled with the class they belong to. "
+        "Check the pictures really show what the label says, and that the size you chose "
+        "still leaves the thing you care about visible."
+    ),
+    "intensity": (
+        "How bright the red, green and blue channels are across the whole dataset, from 0 "
+        "(black) to 255 (white). A spike hard against one end means many images are blown "
+        "out or nearly black; three curves lying on top of each other means the pictures "
+        "are effectively greyscale."
+    ),
+    "class_means": (
+        "The average of every image in one class. A mean image that still shows a clear "
+        "shape means that class looks consistent, so it is easy to learn; a formless blur "
+        "means the object moves around the frame, which is harder but more realistic."
+    ),
     "target_distribution": (
         "The spread of the value you are predicting. Check the range is what you expect and "
         "watch for a long tail: a few extreme targets pull [[regression]] errors around."
@@ -37,6 +53,11 @@ CAPTIONS: dict[str, str] = {
         "The percentage of missing values per column before and after cleaning. Bars that "
         "shrink to zero were filled or dropped; bars that did not move were left alone on "
         "purpose."
+    ),
+    "clean_before_after_classes": (
+        "How many images each class has before and after cleaning. Bars that shrink lost "
+        "duplicate or blank images; a bar that disappears means the class has no images "
+        "left, which the assistant treats as an error rather than a smaller dataset."
     ),
     "training_curves": (
         "Left: [[loss]] per [[epoch]] for the training and validation splits. Right: the same "
@@ -56,6 +77,11 @@ CAPTIONS: dict[str, str] = {
         "Precision and recall for each class. Precision is how often a prediction of that "
         "class is right; recall is how much of that class the model finds. Small classes with "
         "low bars are the ones to fix."
+    ),
+    "misclassified": (
+        "The validation images the model got most confidently wrong, each labelled "
+        "true -> predicted. The same confusion repeated is a fixable labelling or "
+        "[[class imbalance]] problem; a scatter of unrelated one-offs is just noise."
     ),
     "pred_vs_actual": (
         "Each point is one row: actual value across, predicted value up. Perfect predictions "

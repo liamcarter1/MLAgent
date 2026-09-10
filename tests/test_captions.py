@@ -8,6 +8,7 @@ EXPECTED_KINDS = {
     "histograms", "missing", "class_balance", "target_distribution", "correlation",
     "clean_before_after_missing", "training_curves", "confusion", "roc_pr", "per_class",
     "pred_vs_actual", "residuals", "compare_curves", "compare_runs",
+    "thumbnails", "intensity", "class_means", "misclassified", "clean_before_after_classes",
 }
 
 
@@ -38,3 +39,24 @@ def test_longest_suffix_wins_and_unknown_returns_empty():
 def test_comparison_captions_match_by_stem():
     assert caption_for("plots/compare_curves.png") == CAPTIONS["compare_curves"]
     assert caption_for("plots/compare_runs.png") == CAPTIONS["compare_runs"]
+
+
+def test_the_image_caption_kinds_exist_and_read_as_guidance():
+    from mlagent.captions import CAPTIONS
+
+    for kind in ("thumbnails", "intensity", "class_means", "misclassified",
+                 "clean_before_after_classes"):
+        assert kind in CAPTIONS
+        assert len(CAPTIONS[kind]) > 80
+
+
+def test_caption_for_matches_the_new_image_figure_names():
+    from mlagent.captions import CAPTIONS, caption_for
+
+    assert caption_for("raw_thumbnails.png") == CAPTIONS["thumbnails"]
+    assert caption_for("clean_class_means.png") == CAPTIONS["class_means"]
+    assert caption_for("val_misclassified.png") == CAPTIONS["misclassified"]
+    assert caption_for("raw_intensity.png") == CAPTIONS["intensity"]
+    assert caption_for("clean_before_after_classes.png") == (
+        CAPTIONS["clean_before_after_classes"]
+    )
