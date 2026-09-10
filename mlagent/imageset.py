@@ -59,10 +59,20 @@ class ImageSet:
         """Raise ValueError if the arrays and the manifest do not line up."""
         if self.images.ndim != 4 or self.images.shape[3] != 3:
             raise ValueError(f"images must be (N, H, W, 3); got {self.images.shape}")
+        if self.images.dtype != np.uint8:
+            raise ValueError(f"images must be uint8; got {self.images.dtype}")
         if self.images.shape[1] != self.images.shape[2]:
             raise ValueError("images must be square; run prepare_image on every source")
         if len(self.labels) != self.n_images:
             raise ValueError(f"{len(self.labels)} labels for {self.n_images} images")
+        labels_arr = np.asarray(self.labels)
+        if not np.issubdtype(labels_arr.dtype, np.integer):
+            raise ValueError(f"labels must be an integer dtype; got {labels_arr.dtype}")
+        if labels_arr.size and (labels_arr.min() < 0 or labels_arr.max() >= len(self.class_names)):
+            raise ValueError(
+                f"labels must be in [0, {len(self.class_names)}) to index class_names; "
+                f"got min={int(labels_arr.min())}, max={int(labels_arr.max())}"
+            )
         if len(self.manifest) != self.n_images:
             raise ValueError(f"{len(self.manifest)} manifest rows for {self.n_images} images")
         if not self.class_names:
@@ -99,15 +109,19 @@ def make_manifest(labels, class_names: list[str], sources, sizes) -> pd.DataFram
 
 
 def write_pair(imageset: ImageSet, directory: Path) -> tuple[Path, Path]:
-    """Write `data.npz` (images, labels, class_names) and `manifest.csv` into `directory`."""
+    """Write `data.npz` (images, labels, class_names) and `manifest.csv` into `directory`.
+
+    `validate()` enforces the uint8/integer dtype contract before anything is written, so
+    this never silently casts (and truncates) a mistyped array.
+    """
     imageset.validate()
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     npz_path = directory / RAW_FILE
     np.savez_compressed(
         npz_path,
-        images=np.ascontiguousarray(imageset.images, dtype=np.uint8),
-        labels=np.asarray(imageset.labels, dtype=np.int64),
+        images=np.ascontiguousarray(imageset.images),
+        labels=np.asarray(imageset.labels),
         class_names=np.asarray(imageset.class_names, dtype="U"),
     )
     manifest_path = directory / MANIFEST_FILE
@@ -166,11 +180,40 @@ def blank_indices(images: np.ndarray, threshold: float = BLANK_STD_THRESHOLD) ->
     return [int(i) for i in np.flatnonzero(stds < float(threshold)).tolist()]
 
 
-def stratified_indices(labels, max_images: int | None, seed: int = 0) -> list[int]:
-    """At most `max_images` indices, spread evenly over the classes, sorted ascending.
+def _proportional_allocation(
+    counts: dict[int, int], order: list[int], budget: int
+) -> dict[int, int]:
+    """Largest-remainder allocation of `budget` across `order`, proportional to `counts`.
 
-    Every class present keeps at least one image while the budget allows. `None` (or a cap
-    at or above the number of images) keeps everything.
+    Whenever `budget` covers every class (`budget >= len(order)`), no class is left at
+    zero: any class the quota rounds down to zero is promoted to one, at the expense of
+    the class currently furthest above its own quota. Deterministic given `counts`.
+    """
+    total = sum(counts[k] for k in order)
+    n_classes = len(order)
+    quotas = {k: counts[k] * budget / total for k in order}
+    base = {k: int(quotas[k]) for k in order}
+    remainder = budget - sum(base.values())
+    ranked = sorted(order, key=lambda k: (-(quotas[k] - base[k]), k))
+    for k in ranked[:remainder]:
+        base[k] += 1
+    if budget >= n_classes:
+        for k in order:
+            while base[k] == 0:
+                donor = max((j for j in order if base[j] > 1), key=lambda j: base[j] - quotas[j])
+                base[donor] -= 1
+                base[k] += 1
+    return base
+
+
+def stratified_indices(labels, max_images: int | None, seed: int = 0) -> list[int]:
+    """At most `max_images` indices, allocated across the classes in proportion to how many
+    images each class has (largest-remainder rounding), sorted ascending.
+
+    Every class present keeps at least one index whenever the budget covers every class
+    (`max_images >= number of classes`); the images kept within each class are sampled with
+    the seeded RNG, so the result is deterministic for a given `seed`. `None` (or a cap at
+    or above the number of images) keeps everything.
     """
     values = np.asarray(labels)
     n = int(values.shape[0])
@@ -182,13 +225,12 @@ def stratified_indices(labels, max_images: int | None, seed: int = 0) -> list[in
     for i, label in enumerate(values.tolist()):
         by_class[int(label)].append(i)
     order = sorted(by_class)
-    for key in order:
-        rng.shuffle(by_class[key])
+    counts = {k: len(by_class[k]) for k in order}
+    alloc = _proportional_allocation(counts, order, budget)
     picked: list[int] = []
-    while len(picked) < budget and any(by_class[k] for k in order):
-        for key in order:
-            if len(picked) >= budget:
-                break
-            if by_class[key]:
-                picked.append(by_class[key].pop())
+    for key in order:
+        take_n = min(alloc[key], counts[key])
+        if take_n:
+            chosen = rng.choice(by_class[key], size=take_n, replace=False)
+            picked.extend(int(v) for v in chosen)
     return sorted(picked)

@@ -107,6 +107,21 @@ def test_stratified_indices_caps_and_keeps_every_class():
     assert picked == sorted(picked)
 
 
+def test_stratified_indices_allocates_proportionally_to_class_counts():
+    labels = np.array([0] * 10 + [1] * 4)
+    picked = stratified_indices(labels, max_images=7, seed=0)
+    assert len(picked) == 7
+    counts = np.bincount(labels[picked], minlength=2)
+    assert counts.tolist() == [5, 2]
+
+
+def test_stratified_indices_is_deterministic_for_a_given_seed():
+    labels = np.array([0] * 10 + [1] * 4)
+    first = stratified_indices(labels, max_images=6, seed=0)
+    second = stratified_indices(labels, max_images=6, seed=0)
+    assert first == second
+
+
 def test_stratified_indices_returns_everything_when_uncapped():
     labels = np.array([0, 1, 0, 1])
     assert stratified_indices(labels, max_images=None) == [0, 1, 2, 3]
@@ -130,3 +145,43 @@ def test_validate_rejects_a_mismatched_label_count():
     with pytest.raises(ValueError, match="labels"):
         ImageSet(images=images, labels=labels, class_names=["a", "b"],
                  manifest=manifest).validate()
+
+
+def test_validate_rejects_a_label_outside_the_class_names_range():
+    rng = np.random.default_rng(4)
+    images = rng.integers(0, 255, size=(3, 4, 4, 3), dtype=np.uint8)
+    labels = np.array([0, 1, 2], dtype=np.int64)
+    manifest = make_manifest([0, 0, 0], ["a", "b"], ["x", "y", "z"], [(4, 4)] * 3)
+    with pytest.raises(ValueError, match="labels"):
+        ImageSet(images=images, labels=labels, class_names=["a", "b"],
+                 manifest=manifest).validate()
+
+
+def test_validate_rejects_non_uint8_images():
+    rng = np.random.default_rng(5)
+    images = rng.random((3, 4, 4, 3)).astype(np.float32)
+    labels = np.array([0, 1, 0], dtype=np.int64)
+    manifest = make_manifest(labels, ["a", "b"], ["x", "y", "z"], [(4, 4)] * 3)
+    with pytest.raises(ValueError, match="uint8"):
+        ImageSet(images=images, labels=labels, class_names=["a", "b"],
+                 manifest=manifest).validate()
+
+
+def test_validate_rejects_non_integer_labels():
+    rng = np.random.default_rng(6)
+    images = rng.integers(0, 255, size=(3, 4, 4, 3), dtype=np.uint8)
+    labels = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    manifest = make_manifest([0, 1, 0], ["a", "b"], ["x", "y", "z"], [(4, 4)] * 3)
+    with pytest.raises(ValueError, match="labels"):
+        ImageSet(images=images, labels=labels, class_names=["a", "b"],
+                 manifest=manifest).validate()
+
+
+def test_write_pair_rejects_a_non_uint8_image_array_instead_of_silently_casting(tmp_path):
+    rng = np.random.default_rng(7)
+    images = rng.random((3, 4, 4, 3)).astype(np.float32)
+    labels = np.array([0, 1, 0], dtype=np.int64)
+    manifest = make_manifest(labels, ["a", "b"], ["x", "y", "z"], [(4, 4)] * 3)
+    s = ImageSet(images=images, labels=labels, class_names=["a", "b"], manifest=manifest)
+    with pytest.raises(ValueError, match="uint8"):
+        write_pair(s, tmp_path)
