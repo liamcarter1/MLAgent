@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 
+from mlagent import captions
 from mlagent.cleaning_images import (
     STEPS_MARKER,
     apply_steps,
@@ -15,10 +18,21 @@ from mlagent.cleaning_images import (
 from mlagent.imageset import read_pair, write_pair
 from mlagent.synth.images import SynthImageConfig, generate
 
+TEMPLATE = Path("mlagent/templates/image_common").resolve()
+
 
 def make_set(n=24, size=32, n_classes=3):
     return generate(SynthImageConfig(n_images=n, image_size=size, n_classes=n_classes,
                                      seed=6, noise=0.05))
+
+
+def load_module(name: str):
+    spec = importlib.util.spec_from_file_location(f"tpl_image_common_{name}",
+                                                   TEMPLATE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[f"tpl_image_common_{name}"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_apply_steps_with_no_steps_returns_an_equal_copy():
@@ -74,6 +88,13 @@ def test_render_clean_py_substitutes_the_steps_and_keeps_the_conventions():
     assert source.count("\n# --- ") >= 5
 
 
+def test_template_captions_match_mlagent_captions():
+    module = load_module("clean")
+    assert module.CAPTIONS == {
+        "clean_before_after_classes": captions.CAPTIONS["clean_before_after_classes"]
+    }
+
+
 def test_the_rendered_script_runs_for_real_and_writes_the_clean_pair(project):
     s = make_set(n=24, size=32, n_classes=3)
     write_pair(s, project.data_raw)
@@ -114,6 +135,10 @@ def test_the_rendered_script_leaves_the_raw_pair_untouched(project):
                           "params": {"indices": [0], "reason": "blank images"}}]),
         encoding="utf-8",
     )
+    npz_before = (project.data_raw / "data.npz").read_bytes()
+    manifest_before = (project.data_raw / "manifest.csv").read_bytes()
     subprocess.run([sys.executable, "clean.py"], cwd=str(project.root), check=True,
                    capture_output=True, text=True, encoding="utf-8", timeout=180)
+    assert (project.data_raw / "data.npz").read_bytes() == npz_before
+    assert (project.data_raw / "manifest.csv").read_bytes() == manifest_before
     assert read_pair(project.data_raw).n_images == 16

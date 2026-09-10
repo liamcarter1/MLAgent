@@ -40,8 +40,8 @@ STEPS: list[dict] = json.loads(STEPS_JSON)
 
 # --- captions ---
 # Byte-identical to the matching entry in mlagent/captions.py
-# (tests/test_captions.py checks this); kept here too since this script never depends on
-# the mlagent package.
+# (tests/test_cleaning_images.py checks this); kept here too since this script never
+# depends on the mlagent package.
 CAPTIONS = {
     "clean_before_after_classes": (
         "How many images each class has before and after cleaning. Bars that shrink lost "
