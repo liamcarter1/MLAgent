@@ -21,7 +21,7 @@
 - The only fix op image audits propose is `drop_indices`, params `{"indices": [...], "reason": str}`.
 - Write text files with `encoding="utf-8"`; use `pathlib` everywhere.
 - Tests never hit the network: `FakeLLM` for Claude, `loader=` injection for HuggingFace, `pretrained=none` for every ResNet test run.
-- Every subprocess test that runs an `image_torch` script sets `CUDA_VISIBLE_DEVICES=""` in the child environment, so results never depend on the dev machine's GPU.
+- Every subprocess test that runs an `image_torch` script sets `CUDA_VISIBLE_DEVICES="-1"` in the child environment (not `""`, which unsets the variable on Windows), so results never depend on the dev machine's GPU.
 - `python -m pytest -W error::DeprecationWarning tests/test_plots.py tests/test_template_profile.py tests/test_template_evaluate.py tests/test_template_profile_images.py tests/test_template_evaluate_images.py` must stay clean.
 - Prompts live in `mlagent/prompts/*.md` and are loaded with `prompts_io.load_prompt`; never inline a prompt in Python. Every stage prompt ends with `Audience: {audience}`.
 - `ruff check .` clean (line-length 100); `python -m pytest` green.
@@ -32,6 +32,8 @@
   ```
 
 ## Rulings made while planning (deviations from the spec's letter)
+
+Ten rulings, below, resolve places where the spec's letter and the existing codebase disagreed.
 
 1. **`TEMPLATE_FOR_TASK` stays a literal dict in `templates_io.py`**, gaining `"image_classification": "image_torch"`. The spec asks for it to be "a thin dict built from the registry", but `modality.py` must import `cleaning.py`, which imports `templates_io.py`, so building it from the registry would be a circular import. Instead `tests/test_modality.py` asserts the two agree: `TEMPLATE_FOR_TASK == {t: m.template_family for m in MODALITIES for t in m.task_types}`.
 2. **The image `clean.py` writes `profile_clean.json` itself**, in the same `{before, after, steps, figures}` shape `mlagent/templates/common/clean.py` already writes (`mlagent/templates/common/clean.py:277-283`). The spec says the clean stage "reuses the same script" as the profile, but the tabular clean stage does not re-run `profile.py` either — its `clean.py` writes the before/after summary directly, and the handoff is a single `[["clean.py"]]` command that must not grow a second command (see the `HANDOFF_COMMANDS` constraint).
@@ -72,7 +74,7 @@
 | `mlagent/runs.py` | Suffix-aware `archive_run(project, run_id, checkpoint=None)` |
 | `mlagent/diagnose.py` | Presence-checked `heuristic_proposals` + image moves |
 | `mlagent/prompts/teaching/model_choices_images.md` (new) | Tiny CNN vs small CNN vs transfer learning, per level |
-| `scripts/build_notebook.py`, `notebooks/ML_Training_Agent.ipynb` | New "2. Data" fields, pip line, TASK choice, roadmap text |
+| `scripts/build_notebook.py`, `notebooks/ML_Training_Agent.ipynb` | New "2. Data" fields, pip line, TASK choice, intro cell text |
 | `docs/colab-smoke.md`, `CLAUDE.md` | Milestone 6a checklist; architecture notes |
 | tests | `test_modality.py`, `test_imageset.py`, `test_synth_images.py`, `test_datasources_images.py`, `test_audit_images.py`, `test_cleaning_images.py`, `test_template_profile_images.py`, `test_template_model_images.py`, `test_template_evaluate_images.py`, `test_pipeline_e2e_images.py` (new); `test_captions.py`, `test_templates_io.py`, `test_runs.py`, `test_diagnose.py`, `test_codegen_stage.py`, `test_data_stage.py`, `test_clean_stage.py`, `test_report_stage.py`, `test_colab.py`, `conftest.py` (modified) |
 
@@ -86,7 +88,7 @@
 - Test: `tests/test_modality.py`, `tests/test_templates_io.py`
 
 **Interfaces:**
-- Consumes: `synth.tabular.generate` (`mlagent/synth/tabular.py`), `datasources.drive.load_table` (`mlagent/datasources/drive.py:38`), `datasources.hf.load_tabular` (`mlagent/datasources/hf.py:48`), `audit.audit_tabular` (`mlagent/audit.py:331`), `cleaning.apply_steps` (`mlagent/cleaning.py:89`), `cleaning.render_clean_py` (`mlagent/cleaning.py:127`).
+- Consumes: `synth.tabular.generate` (`mlagent/synth/tabular.py`), `datasources.drive.load_table` (`mlagent/datasources/drive.py:39`), `datasources.hf.load_tabular` (`mlagent/datasources/hf.py:48`), `audit.audit_tabular` (`mlagent/audit.py:331`), `cleaning.apply_steps` (`mlagent/cleaning.py:89`), `cleaning.render_clean_py` (`mlagent/cleaning.py:127`).
 - Produces (used by Tasks 5, 6, 7, 10):
   - `@dataclass(frozen=True) Modality` with fields `name, task_types, data_file, profile_template, clean_template, template_family, teaching_material, profile_figures, generate, load_drive, load_hf, audit, apply_steps, render_clean_py, write_raw, read`
   - `TABULAR: Modality`, `MODALITIES: tuple[Modality, ...]`, `modality_for(task_type: str) -> Modality`
@@ -199,8 +201,12 @@ Edit `pyproject.toml`: add `"pillow>=10.0",` after `"openpyxl>=3.1",` in `depend
 ```toml
 [project.optional-dependencies]
 images = ["torch>=2.2", "torchvision>=0.17"]
-dev = ["pytest>=8.0", "ruff>=0.5", "nbformat>=5.9", "torch>=2.2", "torchvision>=0.17"]
+dev = ["pytest>=8.0", "ruff>=0.5", "nbformat>=5.9", "torch>=2.2"]
 ```
+
+`torchvision` stays only in the `images` extra; `torch` stays in both `images` and `dev`
+so tabular-only dev environments can still import it, but pulling in torchvision (and its
+heavier native wheel matrix) is opt-in via `images`.
 
 In `mlagent/templates_io.py`, replace lines 14-24 with:
 
@@ -362,9 +368,14 @@ from mlagent.datasources.hf import search_datasets
 from mlagent.modality import modality_for
 from mlagent.profile import profile_markdown
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
-from mlagent.synth.tabular import TARGET, SynthTabularConfig
+from mlagent.synth.tabular import TARGET, SynthTabularConfig, generate
 from mlagent.templates_io import copy_shared
 ```
+
+`generate` stays in this import list because `_synthetic` (data.py:145) still calls the
+bare tabular `generate(cfg)` directly; it is not yet routed through the modality record.
+Task 7 changes `_synthetic` to call `modality.generate(cfg)` instead, at which point this
+import can drop back out.
 
 and change `DataStage.__init__` (line 47) to take the loaders from the registry by default:
 
@@ -454,12 +465,19 @@ In `mlagent/stages/codegen.py`, drop `TEMPLATE_FOR_TASK` from the `templates_io`
 - [ ] **Step 4: Run test to verify it passes**
 
 ```
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,images]"
 python -m pytest tests/test_modality.py tests/test_templates_io.py -q
 python -m pytest -q
 ruff check .
 ```
-Expected: all green, ruff clean. The install now pulls `pillow`, `torch` and `torchvision`; on this dev machine `torch` 2.9.1 is already importable and `torchvision` is the one new download. If no `torchvision` wheel exists for Python 3.14, install it on its own (`python -m pip install torchvision`) and report the failure — Tasks 8 and 9 need `import torchvision` to work.
+Run `python -m pip install -e ".[dev,images]"` first. If pip cannot resolve `torchvision`
+on this Python version (e.g. no wheel for Python 3.14 yet), fall back to
+`python -m pip install -e ".[dev]"` instead and record in the task report which of the two
+installs actually succeeded. Expected: all green, ruff clean. The install pulls `pillow`
+and `torch` unconditionally, plus `torchvision` when the `images` extra resolves; on this
+dev machine `torch` 2.9.1 is already importable. Every `resnet18` test (plan ~3676, 3688,
+4241 and any others — grep the plan for `resnet18`) starts with
+`pytest.importorskip("torchvision")` so the suite still passes when only `[dev]` installed.
 
 - [ ] **Step 5: Commit**
 
@@ -1541,7 +1559,7 @@ def load_image_dataset(
 ```
 python -m pytest tests/test_datasources_images.py -q && ruff check mlagent/datasources/
 ```
-Expected: 10 passed, ruff clean.
+Expected: 9 passed, ruff clean.
 
 - [ ] **Step 5: Commit**
 
@@ -2818,7 +2836,7 @@ if __name__ == "__main__":
 ```
 python -m pytest tests/test_audit_images.py tests/test_cleaning_images.py -q && ruff check .
 ```
-Expected: 18 passed, ruff clean.
+Expected: 17 passed, ruff clean.
 
 - [ ] **Step 5: Commit**
 
@@ -3093,9 +3111,8 @@ def test_image_clean_prepare_writes_the_audit_and_an_image_clean_py(project):
         "target_value": 0.9, "data_source": "synthetic", "minutes_per_run": 5,
         "max_rounds": 3, "gpu": "none", "notes": "",
     })
-    ctx, _shown = image_ctx(project, form={"clean.train_fraction": 0.7,
-                                           "clean.val_fraction": 0.15})
-    ctx.questioner.fallback.answers = ["y"] * 10
+    ctx, _shown = image_ctx(project, answers=["y"] * 10,
+                            form={"clean.train_fraction": 0.7, "clean.val_fraction": 0.15})
     handoff = CleanStage().prepare(ctx)
 
     assert handoff.commands == [["clean.py"]]
@@ -3266,14 +3283,15 @@ with the existing body of `prepare` (the synthetic/drive/HuggingFace branch, the
             f" I skipped {len(skipped)} file(s) that were not readable images; the audit "
             "lists them." if skipped else ""
         )
-        ctx.display(
+        message = (
             f"I saved {imageset.n_images} images at {imageset.image_size}x"
             f"{imageset.image_size} pixels across {len(imageset.class_names)} classes "
             f"({', '.join(imageset.class_names)}) to `data/raw/{IMAGE_RAW_FILE}`, with one "
-            "row per image in `data/raw/manifest.csv`.{note} I also wrote `profile.py`, "
+            f"row per image in `data/raw/manifest.csv`.{note} I also wrote `profile.py`, "
             "which measures the images and draws four figures. Run it in the next cell; "
-            "nothing about the raw images is changed.".replace("{note}", note)
+            "nothing about the raw images is changed."
         )
+        ctx.display(message)
         return meta
 
     def _image_synthetic(self, ctx: StageContext, image_size: int):
@@ -3717,7 +3735,8 @@ def test_data_py_runs_as_a_script_without_arguments(clean_image_project):
     proc = subprocess.run(
         [sys.executable, "data.py"], cwd=root, capture_output=True, text=True,
         encoding="utf-8", timeout=180,
-        env={**dict(__import__("os").environ), "CUDA_VISIBLE_DEVICES": ""},
+        # "-1", not "": an empty value unsets the variable on Windows instead of hiding the GPU.
+        env={**dict(__import__("os").environ), "CUDA_VISIBLE_DEVICES": "-1"},
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "train" in proc.stdout
@@ -3807,7 +3826,6 @@ from torch.utils.data import DataLoader, TensorDataset
 SCRIPT_NAME = "data.py"
 PROJECT_DIR = Path(".")
 META_FILE = "data_meta.json"
-MANIFEST_FILE = "manifest.csv"
 DEFAULT_SPLIT_SEED = 42
 MAX_SHIFT_FRACTION = 0.1   # "basic" augmentation shifts by up to this share of the width
 EPS = 1e-6
@@ -4078,7 +4096,7 @@ def build_model(config: dict, n_classes: int, image_size: int) -> nn.Module:
 ```
 python -m pytest tests/test_template_model_images.py -q && ruff check .
 ```
-Expected: 17 passed (the two `resnet18` tests skip if `torchvision` is missing), ruff clean.
+Expected: 16 passed (the two `resnet18` tests skip if `torchvision` is missing), ruff clean.
 
 - [ ] **Step 5: Commit**
 
@@ -4139,7 +4157,8 @@ RESNET = {"model_type": "resnet18", "epochs": 1, "batch_size": 16, "learning_rat
           "pretrained": "none", "freeze_backbone": "no"}
 BLOWN_UP = {**TINY, "learning_rate": 0.1, "epochs": 3}
 
-CPU_ONLY = {**os.environ, "CUDA_VISIBLE_DEVICES": ""}
+# "-1", not "": an empty value unsets the variable on Windows instead of hiding the GPU.
+CPU_ONLY = {**os.environ, "CUDA_VISIBLE_DEVICES": "-1"}
 
 
 def install(project, config) -> Path:
@@ -5091,8 +5110,8 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 
 **Files:**
 - Create: `mlagent/prompts/teaching/model_choices_images.md`
-- Modify: `mlagent/stages/codegen.py:30-38`, `mlagent/stages/codegen.py:57-104`, `mlagent/stages/codegen.py:141-210`, `mlagent/runs.py:53-68`, `mlagent/runs.py:135-145`
-- Test: `tests/test_codegen_stage.py`, `tests/test_runs.py`, `tests/test_prompts_io.py`
+- Modify: `mlagent/stages/codegen.py:30-38`, `mlagent/stages/codegen.py:57-104`, `mlagent/stages/codegen.py:141-210`, `mlagent/runs.py:53-68`, `mlagent/runs.py:135-145`, `mlagent/stages/train.py:44-48`
+- Test: `tests/test_codegen_stage.py`, `tests/test_runs.py`, `tests/test_prompts_io.py`, `tests/test_train_stage.py`
 
 **Interfaces:**
 - Consumes: `modality_for` (Task 1), `templates_io.model_types` (`mlagent/templates_io.py:38`), the `image_torch` schema (Task 8), `clean_image_project` (Task 7), `metrics["checkpoint"]` (Task 9).
@@ -5102,6 +5121,9 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
   - `codegen.check_data(meta: dict, project_root: Path) -> list[str]` handling `modality == "image"`
   - `runs.archive_run(project: Project, run_id: int, checkpoint: str | None = None) -> list[Path]`
   - `mlagent/prompts/teaching/model_choices_images.md`
+  - `TrainStage.prepare`'s preamble text, now modality-aware: `checkpoints/model.pt` and a
+    run-time device sentence for images, `checkpoints/best.joblib` and the CPU sentence for
+    tabular (unchanged)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5333,7 +5355,7 @@ patches of the picture and pass on what they found. The early layers learn edges
 colours, the later ones learn shapes and, eventually, whole objects. Three choices, from
 cheapest to strongest.
 
-<!-- levels: beginner, intermediate -->
+<!--level:beginner,intermediate-->
 ## Tiny CNN
 
 Two convolutional layers and nothing else. It trains in seconds even on the CPU, which
@@ -5361,16 +5383,16 @@ before you pick it, and prefer 64px over 128px images on the CPU.
 (fast, and enough when your images look like ordinary photographs), `no` retrains
 everything (slower, better when your images look nothing like everyday photos -- X-rays,
 say, or satellite tiles).
-<!-- /levels -->
+<!--/level-->
 
-<!-- levels: expert -->
+<!--level:expert-->
 - `tiny_cnn`: 2 conv blocks, ~5k parameters. Sanity check.
 - `small_cnn`: 3 conv blocks with BN and dropout. Default; CPU-viable to a few thousand
   images.
 - `resnet18`: torchvision ResNet-18. `pretrained=imagenet` downloads weights (needs the
   network); `freeze_backbone=yes` trains the head only. ~10x the small CNN's cost per
   epoch; use the GPU runtime, and prefer 64px on CPU.
-<!-- /levels -->
+<!--/level-->
 
 Whatever you pick, you are not stuck with it: the tuning step can switch families, and
 *Redo a stage* regenerates the whole training project.
@@ -5491,20 +5513,34 @@ def check_data(meta: dict, project_root: Path) -> list[str]:
     return problems
 ```
 
-Extend `meta_summary` (line 107) with the image keys, which are `None` for tabular runs:
+Extend `meta_summary` (lines 107-120) with the image keys, which are `None` for tabular
+runs. Full replacement, every key spelled out:
 
 ```python
+def meta_summary(meta: dict) -> dict:
+    features = list(meta.get("feature_columns") or [])
+    labels = list(meta.get("class_labels") or [])
+    modality = meta.get("modality", "tabular")
     return {
-        ...  # every existing key, unchanged
-        "modality": meta.get("modality", "tabular"),
+        "task_type": meta.get("task_type"),
+        "target": meta.get("target"),
+        "n_rows": meta.get("clean_n_rows"),
+        "n_features": len(features),
+        "feature_columns": features[:MAX_LISTED],
+        "categorical_columns": list(meta.get("categorical_columns") or [])[:MAX_LISTED],
+        "n_classes": meta.get("n_classes"),
+        "class_labels": labels[:MAX_LISTED],
+        "splits": meta.get("splits"),
+        "modality": modality,
         "image_size": meta.get("image_size"),
-        "n_images": meta.get("clean_n_rows") if meta.get("modality") == "image" else None,
+        "n_images": meta.get("clean_n_rows") if modality == "image" else None,
     }
 ```
 
 Make `prepare` and the two helpers family-aware. `prepare` passes `template` down; the
 model pick, the recommendation and the message use `labels_for` / `label_for` and the
-modality's teaching material:
+modality's teaching material. Full replacement for lines 141-176, every statement spelled
+out (nothing left as a comment claiming to be "unchanged" inside the `message` list):
 
 ```python
     def prepare(self, ctx: StageContext) -> None:
@@ -5519,18 +5555,29 @@ modality's teaching material:
 
         nested = load_schema(template)
         model_type = self._choose_model(ctx, spec, meta, nested, modality)
-        # mlagent/stages/codegen.py:158-166 unchanged: schema_for, _propose, the
-        # {**proposal, "model_type": model_type} overlay, coerce_config, copy_template,
-        # the config.json write and the `files` join.
+        schema = schema_for(nested, model_type)
+
+        proposal, rationale = self._propose(ctx, spec, meta, schema)
+        proposal = {**proposal, "model_type": model_type}
+        config, notes = coerce_config(proposal, schema)
+        written = copy_template(template, ctx.project.root)
+        ctx.project.write_json(cfg.CONFIG_FILE, config)
+
+        files = ", ".join(f"`{p.name}`" for p in written) + ", `config.json`"
         message = [
             f"I wrote the training project into the project folder: {files}.",
             f"`train.py` trains a **{label_for(template, model_type)}** model; each "
             "[[epoch]] is one pass that records train and validation [[loss]] so we can "
             "watch for [[overfitting]]. `evaluate.py` scores one saved model on one split.",
-            # mlagent/stages/codegen.py:172-175 unchanged: "", rationale, "",
-            # config_table(config, schema).
+            "",
+            rationale,
+            "",
+            config_table(config, schema),
         ]
 ```
+
+The rest of `prepare` (the `notes` append, the confirm/edit block, `self._walkthrough`)
+is unchanged.
 ```python
     def _choose_model(self, ctx, spec, meta: dict, nested: dict, modality) -> str:
         family = modality.template_family
@@ -5584,7 +5631,62 @@ modality's teaching material:
 Finally, `is_complete` (line 135) already looks the family up through `modality_for` after
 Task 1; leave it as is.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Make the train-stage preamble modality-aware**
+
+`mlagent/stages/train.py:44-48` currently says training always runs on the CPU and saves
+`checkpoints/best.joblib`, which is only true for tabular. Add
+`from mlagent.modality import modality_for` to the imports, and replace those lines with:
+
+```python
+        modality = modality_for(spec.task_type)
+        if modality.name == "image":
+            device_sentence = (
+                "Training picks its [[device]] at run time -- the [[GPU]] if this runtime "
+                "has one, otherwise the [[CPU]] -- so there is no [[compute unit]] cost gate "
+                "for this run."
+            )
+            checkpoint_sentence = (
+                f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
+                "metric curves as it goes, and saves the best model to "
+                "`checkpoints/model.pt`."
+            )
+        else:
+            device_sentence = (
+                "Training runs on the [[CPU]] for tabular data, so there is no "
+                "[[compute unit]] cost gate for this run."
+            )
+            checkpoint_sentence = (
+                f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
+                "metric curves as it goes, and saves the best model to "
+                "`checkpoints/best.joblib`."
+            )
+        ctx.display(
+            f"{device_sentence} {checkpoint_sentence} `evaluate.py` then scores that model "
+            f"on the [[validation set]] and draws the {spec.metric} figures. Run both cells."
+        )
+```
+
+Add to `tests/test_train_stage.py`:
+
+```python
+def test_the_preamble_names_the_image_checkpoint_and_the_tabular_one(project, image_project):
+    from mlagent.stages.train import TrainStage
+
+    shown, ctx = capture_ctx(image_project)
+    TrainStage().prepare(ctx)
+    assert "checkpoints/model.pt" in " ".join(shown)
+    assert "GPU if this runtime" in " ".join(shown)
+
+    shown, ctx = capture_ctx(project)
+    TrainStage().prepare(ctx)
+    assert "checkpoints/best.joblib" in " ".join(shown)
+    assert "runs on the [[CPU]] for tabular data" in " ".join(shown)
+```
+
+(`capture_ctx` and `image_project` are the fixtures already used elsewhere in this file;
+adjust the call to however this file currently builds a train-ready image project.)
+
+- [ ] **Step 5: Run test to verify it passes**
 
 ```
 python -m pytest tests/test_codegen_stage.py tests/test_runs.py tests/test_prompts_io.py tests/test_train_stage.py tests/test_tune_stage.py -q
@@ -5593,10 +5695,10 @@ ruff check .
 ```
 Expected: all green, ruff clean.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add mlagent/stages/codegen.py mlagent/runs.py mlagent/prompts/teaching/model_choices_images.md tests/test_codegen_stage.py tests/test_runs.py tests/test_prompts_io.py
+git add mlagent/stages/codegen.py mlagent/stages/train.py mlagent/runs.py mlagent/prompts/teaching/model_choices_images.md tests/test_codegen_stage.py tests/test_runs.py tests/test_prompts_io.py tests/test_train_stage.py
 git commit -m "feat: family-aware codegen, the image model-choice primer and suffix-aware run archiving
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -5795,7 +5897,32 @@ def test_the_tune_prompt_names_no_family_specific_keys():
 ```
 python -m pytest tests/test_diagnose.py tests/test_templates_io.py tests/test_prompts_io.py -q
 ```
-Expected: the 18 parametrised presence tests fail with `assert [] ... len(proposals) == 1` (no image branch exists, so `changes` stays empty and `heuristic_proposals` returns `[]`), and the named image tests fail with `IndexError: list index out of range`. `test_the_tune_prompt_names_no_family_specific_keys` and the two `edit_config` tests should PASS already -- record that in the step-4 note if so; `prompts/tune.md` already names no family keys.
+Expected: today's `heuristic_proposals` has no image branch, so an image family
+(`tiny_cnn`/`small_cnn`/`resnet18`) never matches `family == "gradient_boosting"` or
+`family == "random_forest"` and always falls into the linear `else` branch inside
+whichever label's `if`/`elif`. Concretely:
+`test_every_image_proposal_only_touches_keys_in_its_own_schema[overfitting-*]` (3 of the
+18 parametrised cases) fail on `assert set(changes) <= set(schema)` because that branch
+sets `changes = {"alpha": 0.001}` and no image schema has `alpha`. The other 15
+parametrised cases already pass, by coincidence: `underfitting`/`improving` only ever
+scale `epochs`, `learning_rate_too_high` only ever scales `learning_rate`, and
+`failed_run` scales both -- all common keys every image schema also has -- and `plateau`
+sets `changes = {"model_type": "gradient_boosting"}`, and `model_type` is a common key
+too, so the subset check passes even though `"gradient_boosting"` is not a valid image
+model (Task 11's job is to fix the value, not just the key). Among the six named image
+tests, four fail: `test_overfitting_on_a_cnn_turns_augmentation_on_and_regularises`
+(`KeyError: 'augment'`), `test_underfitting_on_a_cnn_adds_epochs_and_raises_the_learning_rate`
+(`KeyError: 'learning_rate'`), `test_a_high_learning_rate_is_lowered_and_the_batch_grows`
+(`KeyError: 'batch_size'`), and `test_a_plateau_lowers_only_the_learning_rate`
+(`AssertionError`: `set(changes) == {'model_type'}`, not `{'learning_rate'}`).
+`test_a_failed_image_run_is_retried_more_gently` and
+`test_a_resnet_overfitting_proposal_never_sets_dropout` already pass by the same
+coincidence. `test_a_tabular_proposal_never_sets_an_image_key` and
+`test_target_met_still_proposes_nothing_for_images` already pass because they exercise
+only pre-existing tabular/`target_met` behaviour that Task 11 does not touch.
+`test_the_tune_prompt_names_no_family_specific_keys` and the two `edit_config` tests
+should PASS already -- record that in the step-4 note if so; `prompts/tune.md` already
+names no family keys.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -5928,7 +6055,7 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 
 ---
 
-### Task 12: The notebook -- image fields in "2. Data", the pip line and the roadmap
+### Task 12: The notebook -- image fields in "2. Data", the pip line and the intro cell text
 
 **Files:**
 - Modify: `scripts/build_notebook.py:29-52`, `scripts/build_notebook.py:70-73`, `scripts/build_notebook.py:100-132`, `scripts/build_notebook.py:147-194`, `notebooks/ML_Training_Agent.ipynb` (regenerated)
@@ -5970,8 +6097,6 @@ def test_every_task_label_in_the_notebook_is_one_the_intake_stage_knows():
 
     intake = next(s for s in notebook_sources() if "#@title 1. Project" in s)
     line = next(ln for ln in intake.splitlines() if ln.startswith("TASK = "))
-    offered = set(re.findall(r"'([^']+)'", line))
-    offered.discard("Tabular classification") or offered
     assert set(re.findall(r"'([^']+)'", line)) <= set(TASK_LABELS) | {
         "Tabular classification"
     }
@@ -5991,6 +6116,12 @@ def test_the_tabular_only_hints_say_so():
     for line in source.splitlines():
         if "**N_FEATURES**" in line or "**TARGET_COLUMN**" in line:
             assert "ignored for image tasks" in line
+
+
+def test_the_n_classes_hint_covers_images_too():
+    source = data_cell()
+    line = next(ln for ln in source.splitlines() if "**N_CLASSES**" in ln)
+    assert "for images, 2 to 5" in line
 
 
 def test_the_data_cell_passes_every_image_answer_key():
@@ -6025,7 +6156,7 @@ def test_the_gpu_hint_no_longer_defers_images_to_a_later_milestone():
     assert "later milestone" not in intake
 
 
-def test_the_notebook_is_up_to_date_with_the_builder(tmp_path, monkeypatch):
+def test_the_notebook_is_up_to_date_with_the_builder():
     import subprocess
     import sys
 
@@ -6089,6 +6220,15 @@ and replace the GPU hint (lines 129-132) with:
         "ResNet-18* really wants one.",
         "GPU = 'No GPU (CPU only)'  #@param ['No GPU (CPU only)', 'T4 GPU', "
         "'Any available GPU']",
+```
+
+Also update the shared `N_CLASSES` hint (lines 158-159), since it now drives image
+classification too, not just tabular:
+
+```python
+        "#@markdown **N_CLASSES** — Synthetic only, classification. How many categories "
+        "the label can take; `2` for yes/no, or for images, 2 to 5.",
+        "N_CLASSES = 2  #@param {type:'integer'}",
 ```
 
 In the "2. Data" cell, change the two tabular hints and add the five image fields (the new
@@ -6178,7 +6318,7 @@ python -m pytest tests/test_colab.py -q
 python -m pytest -q
 ruff check .
 ```
-Expected: the builder prints `wrote ... (22 cells)`, all tests pass, ruff clean.
+Expected: the builder prints `wrote ... (21 cells)`, all tests pass, ruff clean.
 
 - [ ] **Step 5: Commit**
 
@@ -6201,6 +6341,11 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 
 **Interfaces:**
 - Consumes: everything from Tasks 1-12; `Orchestrator` (`mlagent/orchestrator.py`), `FakeLLM` (`mlagent/llm.py`), the `advance` fixture (`tests/conftest.py:114`), `tune.STOP_LABEL` / `apply_label` (`mlagent/stages/tune.py:51, 135`).
+- Wall-clock budget: `tests/test_pipeline_e2e_images.py` trains real (tiny, CPU) models via
+  subprocess, same as `tests/test_pipeline_e2e.py` does for tabular. Target under 90
+  seconds total for the file on CPU; `small_config` (below) is what keeps it there by
+  shrinking `epochs`/`batch_size` right after codegen writes its defaults, before the
+  real `train.py` subprocess runs.
 - Produces: `render_report(project_name, spec, runs, best, eval_test, lessons, figures, meta=None) -> str` -- one new optional trailing parameter carrying `data_meta.json`.
 
 - [ ] **Step 1: Write the failing test**
@@ -6213,6 +6358,8 @@ Create `tests/test_pipeline_e2e_images.py`:
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -6267,8 +6414,9 @@ class AutoApproveQuestioner(ScriptedQuestioner):
 @pytest.fixture(autouse=True)
 def cpu_only(monkeypatch):
     """The generated scripts run as subprocesses; keep them off the dev machine's GPU."""
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
-    assert os.environ["CUDA_VISIBLE_DEVICES"] == ""
+    # "-1", not "": an empty value unsets the variable on Windows instead of hiding the GPU.
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "-1"
 
 
 def make_orchestrator(project, questioner=None):
@@ -6290,9 +6438,31 @@ def small_config(project) -> None:
                                        "batch_size": 16})
 
 
+def advance_to_codegen(orch, project, answers) -> list[str]:
+    """Like the `advance` fixture, but stops the moment codegen completes, so the test can
+    call `small_config` before the real `train.py` subprocess starts."""
+    ran: list[str] = []
+    for _ in range(12):
+        ran += orch.run(until="codegen", answers=answers)
+        if "codegen" in ran:
+            return ran
+        handoff = orch.waiting()
+        assert handoff is not None, "pipeline stalled before reaching codegen"
+        for command in handoff.commands:
+            result = subprocess.run(
+                [sys.executable, *command], cwd=str(project.root), capture_output=True,
+                text=True, encoding="utf-8", timeout=300,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+    raise AssertionError("pipeline did not reach codegen")
+
+
 def test_the_image_pipeline_runs_through_every_handoff(project, advance):
     orch = make_orchestrator(project)
-    assert advance(orch, project, answers=FORM_ANSWERS) == ALL_STAGES
+    ran = advance_to_codegen(orch, project, FORM_ANSWERS)
+    small_config(project)
+    ran += advance(orch, project, answers=FORM_ANSWERS)
+    assert ran == ALL_STAGES
 
     assert project.read_json("spec.json")["task_type"] == "image_classification"
     meta = project.read_json("data_meta.json")
@@ -6338,7 +6508,10 @@ def test_one_guided_tuning_round_on_an_image_run_then_stop(project, advance):
     orch = make_orchestrator(
         project, questioner=AutoApproveQuestioner([apply_label(1), STOP_LABEL])
     )
-    assert advance(orch, project, answers=answers) == ALL_STAGES
+    ran = advance_to_codegen(orch, project, answers)
+    small_config(project)
+    ran += advance(orch, project, answers=answers)
+    assert ran == ALL_STAGES
 
     runs = read_runs(project.runs_path)
     assert [r["run_id"] for r in runs] == [1, 2]
@@ -6358,7 +6531,10 @@ def test_one_guided_tuning_round_on_an_image_run_then_stop(project, advance):
 def test_the_expert_level_image_run_still_produces_every_figure(project, advance):
     answers = {**FORM_ANSWERS, "intake.learning_level": "Expert - just the numbers"}
     orch = make_orchestrator(project)
-    assert advance(orch, project, answers=answers) == ALL_STAGES
+    ran = advance_to_codegen(orch, project, answers)
+    small_config(project)
+    ran += advance(orch, project, answers=answers)
+    assert ran == ALL_STAGES
     assert project.read_json("spec.json")["learning_level"] == "expert"
     for figure in ("raw_thumbnails.png", "raw_class_balance.png", "raw_intensity.png",
                    "raw_class_means.png"):
@@ -6447,13 +6623,45 @@ def _data_section(meta: dict) -> list[str]:
     return ["## Data", "", f"Trained on {detail}.", ""]
 ```
 
-and insert the section into `lines` immediately after the `**Task:** ...` block (between
-the current lines 41 and 42, i.e. before `"## Run history"`):
+and split the `lines = [...]` literal (lines 35-60) so the data section can be spliced in
+between the `**Task:** ...` block and `"## Run history"`, rather than appended after the
+whole list is already built:
 
 ```python
+    lines = [
+        f"# {project_name}: training report",
+        "",
+        f"**Goal:** {spec.get('goal', '')}",
+        "",
+        f"**Task:** {spec.get('task_type', '')} | **Metric:** {metric} | "
+        f"**Target:** {_fmt(spec.get('target_value'))}",
+        "",
+    ]
     if meta:
         lines += _data_section(meta)
+    lines += [
+        "## Run history",
+        "",
+        summarise(runs, metric),
+        "",
+        "## Best configuration",
+        "",
+        f"Run {(best or {}).get('run_id', '-')} with validation {metric} "
+        f"{_fmt((best or {}).get('best_val_metric'))}:",
+        "",
+        "```json",
+        json.dumps(best_cfg, indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Held-out test result",
+        "",
+        f"Test {eval_test.get('metric', metric)}: **{_fmt(eval_test.get('value'))}** "
+        f"(loss {_fmt(eval_test.get('loss'))}). Evaluated once on the test split.",
+    ]
 ```
+
+The rest of the function (the checkpoint line and everything from `lines += [` at the old
+line 64 onward) is unchanged.
 
 In `ReportStage.debrief`, pass the meta through at the `render_report(` call (line 196):
 
@@ -6545,8 +6753,9 @@ Project and interview* with **TASK = Image classification**; the cell list is un
   ```
   and extend the deprecation-warning line to
   `python -m pytest -W error::DeprecationWarning tests/test_plots.py tests/test_template_profile.py tests/test_template_evaluate.py tests/test_template_profile_images.py tests/test_template_evaluate_images.py`.
-- In Conventions, add: "`torch` and `torchvision` live in the `images` extra and in `dev`;
-  every test that runs an image template sets `CUDA_VISIBLE_DEVICES=\"\"` and every
+- In Conventions, add: "`torch` lives in the `images` extra and in `dev`; `torchvision`
+  lives only in the `images` extra. Every test that runs an image template sets
+  `CUDA_VISIBLE_DEVICES=\"-1\"` (not `\"\"`, which unsets the variable on Windows) and every
   `resnet18` test run uses `pretrained=none`, so the suite never downloads weights."
 
 - [ ] **Step 6: Run everything**
@@ -6599,7 +6808,7 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 | Section 4 — codegen family from the registry, `model_choices_images.md`, `recommend_model` choices from the schema, the walkthrough on the new templates | 10 |
 | Section 4 — presence-checked `heuristic_proposals`, the image move table, `prompts/tune.md` naming no sklearn keys | 11 |
 | Section 4 — `render_report` mentioning `image_size` and `n_images` | 13 |
-| Section 4 — notebook pip line, "2. Data" fields, roadmap text, rebuild, `HANDOFF_COMMANDS` unchanged | 12 |
+| Section 4 — notebook pip line, "2. Data" fields, intro cell text, rebuild, `HANDOFF_COMMANDS` unchanged | 12 |
 | Section 4 — `pyproject.toml` (`pillow` core; `images` extra; `dev`) | 1 |
 | Section 4 — Testing: the six unit test files, the real-template test, the pipeline test, `-W error::DeprecationWarning`, no network | 1-9, 13 |
 | Section 4 — Colab smoke, six items | 13 |
@@ -6654,7 +6863,7 @@ each point at the current line range in the Files block and describe the one edi
   `log_finished_run` with a positional third argument; the tabular fallback keeps
   `runs.BEST_CHECKPOINT` meaningful for legacy runs.
 - `heuristic_proposals(diagnosis, config, schema)` (Task 11) keeps its Milestone 5
-  signature, so `mlagent/stages/tune.py:315` needs no change.
+  signature, so `mlagent/stages/tune.py:321` needs no change.
 - `render_report(..., figures, meta=None)` (Task 13) adds only a trailing optional
   parameter, so `tests/test_report_stage.py:205`'s existing positional call still works.
 - `labels_for(family)` / `label_for(family, code)` / `fallback_model(meta, family)`
