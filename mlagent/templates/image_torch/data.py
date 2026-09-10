@@ -49,7 +49,12 @@ def load_pair(path: Path):
 
 # --- splitting ---
 def stratified_split(labels: np.ndarray, splits: dict, seed: int) -> dict[str, np.ndarray]:
-    """Index arrays for train/val/test, each class split in the same proportions."""
+    """Index arrays for train/val/test, each class split in the same proportions.
+
+    A class with fewer than 3 images cannot supply a non-empty val and test slice as
+    well as a non-empty train slice, so it goes entirely to train (with a warning)
+    rather than risk an empty val/test slice for that class.
+    """
     rng = np.random.default_rng(int(seed))
     train_frac = float(splits["train"])
     val_frac = float(splits["val"])
@@ -58,6 +63,10 @@ def stratified_split(labels: np.ndarray, splits: dict, seed: int) -> dict[str, n
         idx = np.flatnonzero(labels == label)
         rng.shuffle(idx)
         n = len(idx)
+        if n < 3:
+            print(f"warning: class {label} has only {n} image(s); keeping all of it in train")
+            chosen["train"].extend(idx.tolist())
+            continue
         n_train = max(1, int(round(train_frac * n)))
         n_val = max(1, int(round(val_frac * n)))
         if n_train + n_val >= n:
@@ -126,8 +135,25 @@ def make_loader(pair, batch_size: int, shuffle: bool, seed: int = 0) -> DataLoad
     )
 
 
+def shift_batch(x: torch.Tensor, dy: int, dx: int) -> torch.Tensor:
+    """Shift every image in the batch by `(dy, dx)` pixels, padding with zeros.
+
+    Unlike `torch.roll`, pixels that leave one edge are dropped, not wrapped onto the
+    opposite edge: the output is zero-padded then cropped back to the input size.
+    """
+    height, width = x.shape[2], x.shape[3]
+    pad = max(abs(int(dy)), abs(int(dx)), 1)
+    padded = torch.nn.functional.pad(x, (pad, pad, pad, pad))
+    top = pad - int(dy)
+    left = pad - int(dx)
+    return padded[:, :, top:top + height, left:left + width]
+
+
 def augment_batch(x: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
-    """Random horizontal flip plus a small random shift, in plain tensor ops.
+    """Random horizontal flip plus a small random pad-and-crop shift, in plain tensor ops.
+
+    `shift_batch` pads with zeros and crops rather than wrapping, so a pixel shifted off
+    one edge is gone, not glued onto the opposite edge.
 
     No torchvision: the two cheap CNN families must run wherever torch does.
     """
@@ -135,8 +161,9 @@ def augment_batch(x: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
     out = x.clone()
     out[flip] = torch.flip(out[flip], dims=[3])
     limit = max(1, int(round(MAX_SHIFT_FRACTION * x.shape[3])))
-    shifts = torch.randint(-limit, limit + 1, (2,), generator=generator).tolist()
-    return torch.roll(out, shifts=(int(shifts[0]), int(shifts[1])), dims=(2, 3))
+    dy = int(torch.randint(-limit, limit + 1, (1,), generator=generator).item())
+    dx = int(torch.randint(-limit, limit + 1, (1,), generator=generator).item())
+    return shift_batch(out, dy, dx)
 
 
 def pick_device() -> str:

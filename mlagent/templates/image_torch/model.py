@@ -5,10 +5,9 @@ Three families, all returning a plain `torch.nn.Module` that maps a (N, 3, H, W)
 
 - tiny_cnn:  two convolutional blocks. Fast, and enough for simple shapes.
 - small_cnn: three convolutional blocks with batch norm and dropout.
-- resnet18:  a deeper transfer-learning network, optionally starting from ImageNet
-             weights. Its extra dependency is imported *inside* the builder function,
-             never at module scope, so a tiny_cnn or small_cnn run never needs it
-             installed (see `_resnet18` below).
+- resnet18:  torchvision's ResNet-18, optionally starting from ImageNet weights.
+             `torchvision` is imported *inside* the `_resnet18` builder function, never
+             at module scope, so a tiny_cnn or small_cnn run never needs it installed.
 """
 
 from __future__ import annotations

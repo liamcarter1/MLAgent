@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from mlagent.templates_io import default_config, load_schema, schema_for, validate_config
@@ -103,6 +105,46 @@ def test_the_split_is_frozen_by_split_seed_not_by_the_model_seed(clean_image_pro
     assert torch.equal(a["test"][0], b["test"][0])
 
 
+def test_tiny_classes_go_entirely_to_train_with_a_warning(clean_image_project, capsys):
+    root = install(clean_image_project)
+    data = load_module(root, "data")
+    # class 0: 1 image, class 1: 2 images, class 2: a normal 20-image class.
+    labels = np.array([0] + [1, 1] + [2] * 20, dtype=np.int64)
+    splits = {"train": 0.7, "val": 0.15, "test": 0.15}
+    parts = data.stratified_split(labels, splits, seed=1)
+
+    all_indices = [int(i) for name in ("train", "val", "test") for i in parts[name]]
+    assert sorted(all_indices) == list(range(len(labels)))  # no overlap, none dropped
+    assert set(np.flatnonzero(labels == 0).tolist()) <= set(parts["train"].tolist())
+    assert set(np.flatnonzero(labels == 1).tolist()) <= set(parts["train"].tolist())
+    assert not (set(np.flatnonzero(labels == 0).tolist()) & set(parts["val"].tolist()))
+    assert not (set(np.flatnonzero(labels == 0).tolist()) & set(parts["test"].tolist()))
+    assert not (set(np.flatnonzero(labels == 1).tolist()) & set(parts["val"].tolist()))
+    assert not (set(np.flatnonzero(labels == 1).tolist()) & set(parts["test"].tolist()))
+
+    output = capsys.readouterr().out
+    assert "warning" in output and "class 0" in output and "class 1" in output
+
+
+def test_shift_batch_pads_instead_of_wrapping(clean_image_project):
+    root = install(clean_image_project)
+    data = load_module(root, "data")
+    x = torch.zeros(1, 3, 8, 8)
+    x[:, :, :, 0] = 1.0  # left column is 1.0, right column is 0.0
+
+    shifted_right = data.shift_batch(x, dy=0, dx=3)
+    assert shifted_right.shape == x.shape
+    # The three left-most columns are zero padding, not the wrapped right edge.
+    assert torch.equal(shifted_right[:, :, :, :3], torch.zeros(1, 3, 8, 3))
+    # The original left column (value 1.0) now sits at its shifted position.
+    assert torch.all(shifted_right[:, :, :, 3] == 1.0)
+
+    shifted_left = data.shift_batch(x, dy=0, dx=-3)
+    assert shifted_left.shape == x.shape
+    # Shifting the 1.0 column off the left edge must not glue it onto the right edge.
+    assert torch.all(shifted_left[:, :, :, -3:] == 0.0)
+
+
 def test_make_loader_and_augment_batch_keep_the_shape(clean_image_project):
     root = install(clean_image_project)
     data = load_module(root, "data")
@@ -134,12 +176,32 @@ def test_the_cnn_families_forward_to_the_right_shape(clean_image_project, model_
     assert out.shape == (2, 4)
 
 
+def _imports_torchvision(node: ast.AST) -> bool:
+    if isinstance(node, ast.Import):
+        return any("torchvision" in alias.name for alias in node.names)
+    if isinstance(node, ast.ImportFrom):
+        return bool(node.module) and "torchvision" in node.module
+    return False
+
+
 def test_the_cnn_families_never_import_torchvision(clean_image_project):
     root = install(clean_image_project)
-    source = (root / "model.py").read_text(encoding="utf-8")
-    module_level = source.split("def ")[0]
-    assert "torchvision" not in module_level
-    assert "import torchvision" in source
+    tree = ast.parse((root / "model.py").read_text(encoding="utf-8"))
+
+    # No top-level (module-scope) statement imports torchvision.
+    assert not any(_imports_torchvision(node) for node in tree.body)
+
+    # The resnet18 builder function imports it lazily, inside its own body.
+    resnet_builders = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and "resnet" in node.name.lower()
+    ]
+    assert resnet_builders, "expected a resnet18 builder function"
+    assert any(
+        _imports_torchvision(inner)
+        for builder in resnet_builders
+        for inner in ast.walk(builder)
+    )
 
 
 def test_resnet18_builds_without_pretrained_weights(clean_image_project):
