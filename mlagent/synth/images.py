@@ -123,7 +123,13 @@ def _draw_one(shape: str, size: int, noise: float, rng: np.random.Generator) -> 
 
 
 def generate(cfg: SynthImageConfig) -> ImageSet:
-    """Draw `cfg.n_images` shape images, then inject the configured quirks."""
+    """Draw `cfg.n_images` shape images, then inject the configured quirks.
+
+    One index per class (its first occurrence in the label plan) is protected from being
+    chosen as a duplicate or blank quirk target, so a rare class produced by a strong
+    `class_imbalance` can never be overwritten out of existence; the requested quirk count
+    is capped at however many unprotected indices remain.
+    """
     cfg.validate()
     rng = np.random.default_rng(int(cfg.seed))
     class_names = sorted(SHAPES[: cfg.n_classes])
@@ -136,7 +142,10 @@ def generate(cfg: SynthImageConfig) -> ImageSet:
     n = int(cfg.n_images)
     n_blank = int(round(float(cfg.blank_fraction) * n))
     n_dup = int(round(float(cfg.duplicate_fraction) * n))
-    quirk_targets = rng.permutation(n)[: n_blank + n_dup]
+    protected = {int(np.flatnonzero(labels == k)[0]) for k in range(cfg.n_classes)}
+    eligible = np.array([i for i in range(n) if i not in protected], dtype=int)
+    n_quirk = min(n_blank + n_dup, len(eligible))
+    quirk_targets = eligible[rng.permutation(len(eligible))[:n_quirk]]
     for i in quirk_targets[:n_blank]:
         level = int(rng.integers(40, 220))
         images[int(i)] = np.full((size, size, 3), level, dtype=np.uint8)

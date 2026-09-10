@@ -70,6 +70,21 @@ def test_no_quirks_means_no_duplicates_and_no_blanks():
     assert blank_indices(s.images) == []
 
 
+def test_strong_imbalance_with_duplicates_and_blanks_never_erases_a_rare_class():
+    # duplicate_fraction + blank_fraction is capped at 0.6 by validate(); 0.5 + 0.1 sits
+    # at that boundary so the quirk pool is as large as possible while staying valid.
+    n_classes = 5
+    for seed in range(5):
+        cfg = SynthImageConfig(
+            n_images=15, image_size=32, n_classes=n_classes, seed=seed,
+            class_imbalance=0.9, duplicate_fraction=0.5, blank_fraction=0.1,
+        )
+        s = generate(cfg)
+        s.validate()
+        counts = np.bincount(s.labels, minlength=n_classes)
+        assert counts.min() >= 1
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
