@@ -62,3 +62,13 @@ def test_the_image_model_choices_material_trims_per_level():
         text = material("model_choices_images", level)
         assert text.strip()
         assert "<!--" not in text
+
+
+def test_the_tune_prompt_names_no_family_specific_keys():
+    from mlagent.prompts_io import load_prompt
+
+    text = load_prompt("tune", audience="test audience")
+    for key in ("min_samples_leaf", "max_leaf_nodes", "trees_per_epoch", "l2_regularization",
+                "max_features", "alpha", "iters_per_epoch", "dropout", "freeze_backbone",
+                "pretrained", "augment"):
+        assert key not in text, key

@@ -197,3 +197,133 @@ def test_apply_proposal_rejects_an_unknown_family():
     with pytest.raises(ValueError):
         apply_proposal(config, Proposal(rank=1, changes={"model_type": "svm"}, reason="r"),
                        NESTED)
+
+
+IMAGE_FAMILIES = ("tiny_cnn", "small_cnn", "resnet18")
+IMAGE_LABELS = ("overfitting", "underfitting", "improving", "learning_rate_too_high",
+                "plateau", "failed_run")
+
+
+def image_schema(family: str) -> dict:
+    from mlagent.templates_io import load_schema, schema_for
+
+    return schema_for(load_schema("image_torch"), family)
+
+
+def image_config(family: str) -> dict:
+    from mlagent.templates_io import default_config
+
+    return {**default_config(image_schema(family)), "model_type": family}
+
+
+@pytest.mark.parametrize("family", IMAGE_FAMILIES)
+@pytest.mark.parametrize("label", IMAGE_LABELS)
+def test_every_image_proposal_only_touches_keys_in_its_own_schema(family, label):
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    schema = image_schema(family)
+    proposals = heuristic_proposals(Diagnosis(label), image_config(family), schema)
+    assert len(proposals) == 1
+    changes = proposals[0].changes
+    assert changes
+    assert set(changes) <= set(schema)
+
+
+@pytest.mark.parametrize("family", IMAGE_FAMILIES)
+def test_the_image_proposals_coerce_to_a_real_change(family):
+    from mlagent.diagnose import Diagnosis, apply_proposal, heuristic_proposals
+    from mlagent.templates_io import load_schema
+
+    nested = load_schema("image_torch")
+    config = image_config(family)
+    for label in IMAGE_LABELS:
+        proposal = heuristic_proposals(Diagnosis(label), config, image_schema(family))[0]
+        new_config, diff, _notes = apply_proposal(config, proposal, nested)
+        assert diff, f"{family}/{label} coerced to no change"
+        assert new_config["model_type"] == family
+
+
+def test_overfitting_on_a_cnn_turns_augmentation_on_and_regularises():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    config = {**image_config("small_cnn"), "augment": "none", "dropout": 0.2,
+              "weight_decay": 0.0001}
+    changes = heuristic_proposals(
+        Diagnosis("overfitting"), config, image_schema("small_cnn")
+    )[0].changes
+    assert changes["augment"] == "basic"
+    assert changes["dropout"] > 0.2
+    assert changes["weight_decay"] > 0.0001
+
+
+def test_underfitting_on_a_cnn_adds_epochs_and_raises_the_learning_rate():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    config = image_config("tiny_cnn")
+    changes = heuristic_proposals(
+        Diagnosis("underfitting"), config, image_schema("tiny_cnn")
+    )[0].changes
+    assert changes["epochs"] > config["epochs"]
+    assert changes["learning_rate"] > config["learning_rate"]
+
+
+def test_a_high_learning_rate_is_lowered_and_the_batch_grows():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    config = image_config("small_cnn")
+    changes = heuristic_proposals(
+        Diagnosis("learning_rate_too_high"), config, image_schema("small_cnn")
+    )[0].changes
+    assert changes["learning_rate"] < config["learning_rate"]
+    assert changes["batch_size"] > config["batch_size"]
+
+
+def test_a_plateau_lowers_only_the_learning_rate():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    config = image_config("resnet18")
+    changes = heuristic_proposals(
+        Diagnosis("plateau"), config, image_schema("resnet18")
+    )[0].changes
+    assert set(changes) == {"learning_rate"}
+    assert changes["learning_rate"] < config["learning_rate"]
+
+
+def test_a_failed_image_run_is_retried_more_gently():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    config = image_config("small_cnn")
+    changes = heuristic_proposals(
+        Diagnosis("failed_run"), config, image_schema("small_cnn")
+    )[0].changes
+    assert changes["learning_rate"] < config["learning_rate"]
+    assert changes["epochs"] < config["epochs"]
+
+
+def test_a_resnet_overfitting_proposal_never_sets_dropout():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    changes = heuristic_proposals(
+        Diagnosis("overfitting"), image_config("resnet18"), image_schema("resnet18")
+    )[0].changes
+    assert "dropout" not in changes
+
+
+def test_a_tabular_proposal_never_sets_an_image_key():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+    from mlagent.templates_io import default_config, load_schema, schema_for
+
+    schema = schema_for(load_schema("tabular_sklearn"), "gradient_boosting")
+    config = {**default_config(schema), "model_type": "gradient_boosting"}
+    for label in IMAGE_LABELS:
+        changes = heuristic_proposals(Diagnosis(label), config, schema)[0].changes
+        assert set(changes) <= set(schema)
+        assert "augment" not in changes and "batch_size" not in changes
+
+
+def test_target_met_still_proposes_nothing_for_images():
+    from mlagent.diagnose import Diagnosis, heuristic_proposals
+
+    assert heuristic_proposals(
+        Diagnosis("target_met"), image_config("small_cnn"), image_schema("small_cnn")
+    ) == []

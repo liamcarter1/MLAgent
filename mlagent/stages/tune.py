@@ -23,6 +23,7 @@ from mlagent.diagnose import (
     meets_target,
 )
 from mlagent.llm import LLMError, ToolSpec
+from mlagent.modality import modality_for
 from mlagent.prompts_io import audience, load_prompt
 from mlagent.runlog import best_run, is_better, read_runs, summarise
 from mlagent.runs import (
@@ -36,7 +37,6 @@ from mlagent.spec import Spec
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.teaching import EXPERT, material
 from mlagent.templates_io import (
-    TEMPLATE_FOR_TASK,
     config_table,
     edit_config,
     load_schema,
@@ -245,7 +245,7 @@ class TuneStage(ScriptStageBase):
         config = project.read_json(cfg.CONFIG_FILE)
         if not isinstance(config, dict) or not config.get("model_type"):
             raise RuntimeError("config.json not found; run the codegen stage first")
-        nested = load_schema(TEMPLATE_FOR_TASK[spec.task_type])
+        nested = load_schema(modality_for(spec.task_type).template_family)
 
         metrics_by_run = backfill_latest_metrics(project, runs, read_run_metrics(project, runs))
         diagnosis = diagnose(runs, metrics_by_run, spec)

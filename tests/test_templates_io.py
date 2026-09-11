@@ -195,3 +195,27 @@ def test_shared_file_rejects_a_missing_path():
 
     with pytest.raises(FileNotFoundError):
         shared_file("common/nope.py")
+
+
+def test_edit_config_never_offers_the_image_choice_keys():
+    from mlagent.templates_io import default_config, edit_config, load_schema, schema_for
+    from mlagent.ui.questions import ScriptedQuestioner
+
+    schema = schema_for(load_schema("image_torch"), "small_cnn")
+    config = {**default_config(schema), "model_type": "small_cnn"}
+    questioner = ScriptedQuestioner(["Done"])
+    assert edit_config(questioner, config, schema) == config
+    offered = questioner.asked[0] if questioner.asked else ""
+    assert "augment" not in offered and "model_type" not in offered
+
+
+def test_edit_config_changes_a_numeric_image_key():
+    from mlagent.templates_io import default_config, edit_config, load_schema, schema_for
+    from mlagent.ui.questions import ScriptedQuestioner
+
+    schema = schema_for(load_schema("image_torch"), "tiny_cnn")
+    config = {**default_config(schema), "model_type": "tiny_cnn"}
+    questioner = ScriptedQuestioner([f"batch_size = {config['batch_size']}", "64", "Done"])
+    updated = edit_config(questioner, config, schema)
+    assert updated["batch_size"] == 64
+    assert updated["augment"] == config["augment"]

@@ -148,10 +148,61 @@ def diagnose(runs: list[dict], metrics_by_run: dict[int, dict], spec) -> Diagnos
     return Diagnosis(label, evidence, latest_id, best_id, improved)
 
 
+IMAGE_FAMILIES = ("tiny_cnn", "small_cnn", "resnet18")
+
+
+def _image_move(label: str, choose, scaled, bumped) -> tuple[str, str]:
+    """The fixed image-family move per diagnosis label; returns (expected, reason)."""
+    if label == "overfitting":
+        choose("augment", "basic")
+        bumped("dropout", 1.4, 0.2)
+        bumped("weight_decay", 10.0, 0.001)
+        return "steadier", (
+            "Validation [[loss]] turned upward while training loss kept falling: the "
+            "network is memorising these exact pictures. Random flips and shifts, more "
+            "[[dropout]] and a stronger weight penalty make that much harder."
+        )
+    if label in ("underfitting", "improving"):
+        scaled("epochs", 1.5)
+        scaled("learning_rate", 1.5)
+        reason = (
+            "The last change helped and validation loss was still falling when training "
+            "stopped, so keep going in the same direction with more [[epoch]]s and a "
+            "bigger step each time."
+            if label == "improving"
+            else "Validation loss was still falling at the last [[epoch]]: the network had "
+                 "not finished learning. More epochs and a bigger step per update let it."
+        )
+        return "better", reason
+    if label == "learning_rate_too_high":
+        scaled("learning_rate", 0.3)
+        scaled("batch_size", 2)
+        return "steadier", (
+            "Validation loss jumps up and down instead of settling: each update "
+            "overshoots. A much smaller [[learning rate]] takes smaller steps, and a "
+            "bigger batch averages out more of the noise before each one."
+        )
+    if label == "plateau":
+        scaled("learning_rate", 0.5)
+        return "better", (
+            "The curve has flattened. Halving the [[learning rate]] lets the network "
+            "settle into a better spot instead of bouncing over it."
+        )
+    scaled("learning_rate", 0.3)
+    scaled("epochs", 0.5)
+    return "steadier", (
+        "The run failed, most often from the loss blowing up to infinity. A much smaller "
+        "[[learning rate]] and fewer epochs are the gentlest retry."
+    )
+
+
 def heuristic_proposals(diagnosis: Diagnosis, config: dict, schema: dict) -> list[Proposal]:
     """One fixed proposal per label and family, used when Claude is unavailable.
 
-    Values are scaled from the current config; `apply_proposal` clamps them to the schema.
+    Every helper checks the flat `schema` before setting a key, so a proposal for one
+    family can never set another family's key (an image proposal never reaches for
+    `min_samples_leaf`, a tabular one never reaches for `augment`). Values are scaled from
+    the current config; `apply_proposal` clamps them to the schema.
     """
     label = diagnosis.label
     family = str(config.get("model_type", ""))
@@ -159,13 +210,31 @@ def heuristic_proposals(diagnosis: Diagnosis, config: dict, schema: dict) -> lis
     expected = "better"
 
     def scaled(key: str, factor: float) -> None:
+        if key not in schema:
+            return
         current = config.get(key)
         if isinstance(current, int | float) and not isinstance(current, bool):
             changes[key] = current * factor
 
+    def bumped(key: str, factor: float, floor: float) -> None:
+        """Scale a key that may sit at zero, so it still moves off the floor."""
+        if key not in schema:
+            return
+        current = config.get(key)
+        if not isinstance(current, int | float) or isinstance(current, bool):
+            return
+        changes[key] = current * factor if current else floor
+
+    def choose(key: str, value: str) -> None:
+        if key in schema and config.get(key) != value:
+            changes[key] = value
+
     if label == "target_met":
         return []
-    if label == "overfitting":
+
+    if family in IMAGE_FAMILIES:
+        expected, reason = _image_move(label, choose, scaled, bumped)
+    elif label == "overfitting":
         expected = "steadier"
         if family == "gradient_boosting":
             scaled("min_samples_leaf", 2)
@@ -180,10 +249,7 @@ def heuristic_proposals(diagnosis: Diagnosis, config: dict, schema: dict) -> lis
                       "showing each tree fewer columns makes the trees disagree in useful "
                       "ways instead of all copying the noise.")
         else:
-            current = config.get("alpha")
-            changes["alpha"] = (
-                current * 10 if isinstance(current, int | float) and current else 0.001
-            )
+            bumped("alpha", 10.0, 0.001)
             reason = ("A linear model overfits when its weights grow large; a stronger "
                       "[[regularisation]] penalty (`alpha`) keeps them small.")
     elif label in ("underfitting", "improving"):
