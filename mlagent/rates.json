@@ -1,0 +1,6 @@
+{
+  "units_per_hour": {"T4": 2.0, "L4": 4.8, "A100": 13.0},
+  "unknown_gpu_rate": 2.0,
+  "default_price_per_unit": 0.0999,
+  "default_currency": "$"
+}
