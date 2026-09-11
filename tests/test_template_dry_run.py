@@ -102,3 +102,68 @@ def test_the_tabular_dry_run_section_is_in_the_walkthrough():
     source = (TABULAR_TEMPLATE / "train.py").read_text(encoding="utf-8")
     titles = [title for title, _body in split_sections(source)]
     assert "Dry run" in titles
+
+
+torch = pytest.importorskip("torch")
+
+TINY_CNN = {"model_type": "tiny_cnn", "epochs": 2, "batch_size": 16, "learning_rate": 0.01,
+            "weight_decay": 0.0001, "early_stopping_patience": 0, "seed": 1,
+            "augment": "basic", "dropout": 0.3}
+
+
+def test_the_image_dry_run_writes_the_whole_contract(clean_image_project):
+    root = install(clean_image_project, IMAGE_TEMPLATE, TINY_CNN)
+    proc = run(root, "--dry-run")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = record(root)
+    assert set(data) == DRY_RUN_KEYS
+    assert data["device"] == "cpu" and data["gpu_name"] is None   # CUDA_VISIBLE_DEVICES=-1
+    # 60 images, 70% train split, batch_size 16 -> 3 batches per epoch.
+    assert data["batches_per_epoch"] == 3
+    assert data["seconds_per_batch"] > 0
+    assert data["seconds_per_epoch"] == pytest.approx(
+        data["seconds_per_batch"] * data["batches_per_epoch"])
+    assert data["n_train"] == 42
+    assert data["script"] == "train.py"
+    assert_wrote_nothing_else(root)
+
+
+def test_the_image_dry_run_prints_a_human_line(clean_image_project):
+    root = install(clean_image_project, IMAGE_TEMPLATE, TINY_CNN)
+    proc = run(root, "--dry-run")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
+    # Last non-blank line, not the only line -- see the tabular test's comment above.
+    assert lines[-1].startswith("Dry run: 3 batches in ")
+    assert "on cpu;" in lines[-1] and "3 batches per epoch" in lines[-1]
+
+
+def test_the_image_dry_run_leaves_the_model_untrained_on_disk(clean_image_project):
+    root = install(clean_image_project, IMAGE_TEMPLATE, TINY_CNN)
+    assert run(root, "--dry-run").returncode == 0
+    assert not (root / "checkpoints").exists() or not any(
+        (root / "checkpoints").glob("*.pt"))
+
+
+def test_a_broken_image_dry_run_exits_non_zero_with_the_error_on_stderr(clean_image_project):
+    root = install(clean_image_project, IMAGE_TEMPLATE, TINY_CNN)
+    (root / "data" / "clean" / "data.npz").unlink()
+    proc = run(root, "--dry-run")
+    assert proc.returncode != 0
+    assert proc.stderr.strip()
+    assert not (root / "dry_run.json").exists()
+    assert_wrote_nothing_else(root)
+
+
+def test_a_plain_image_run_still_ignores_stray_kernel_flags():
+    source = (IMAGE_TEMPLATE / "train.py").read_text(encoding="utf-8")
+    assert 'parser.add_argument("--dry-run", action="store_true"' in source
+    assert "def cli_argv()" in source
+
+
+def test_the_image_dry_run_section_is_in_the_walkthrough():
+    from mlagent.codewalk import split_sections
+
+    source = (IMAGE_TEMPLATE / "train.py").read_text(encoding="utf-8")
+    titles = [title for title, _body in split_sections(source)]
+    assert "Dry run" in titles

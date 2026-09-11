@@ -3,6 +3,7 @@ to edit.
 
 Usage (run from the project folder):
   python train.py                one full training run
+  python train.py --dry-run      times three training batches, writes dry_run.json only
 
 After training, run `evaluate.py` to score the saved checkpoint and draw its figures.
 The checkpoint holds a `state_dict` plus the config and class names, so `evaluate.py` can
@@ -45,6 +46,8 @@ METRICS_FILE = "metrics.json"
 CHECKPOINT = Path("checkpoints") / "best.pt"
 CHECKPOINT_REL = "checkpoints/best.pt"
 CURVES_FIGURE = Path("plots") / "training_curves.png"
+DRY_RUN_FILE = "dry_run.json"
+DRY_RUN_BATCHES = 3
 
 # --- captions ---
 # Byte-identical to the matching entry in mlagent/captions.py; kept here too since this
@@ -179,6 +182,93 @@ def draw_curves(project_dir: Path, epochs: list[dict], metric: str) -> None:
     fig.savefig(path, dpi=110, bbox_inches="tight", facecolor=SURFACE)
     redraw(fig)
     plt.close(fig)
+
+
+# --- Dry run ---
+def _dry_batches(loader, count: int) -> list:
+    """`count` batches from the loader, cycling it when the training split is shorter."""
+    batches: list = []
+    while len(batches) < count:
+        before = len(batches)
+        for batch in loader:
+            batches.append(batch)
+            if len(batches) == count:
+                return batches
+        if len(batches) == before:
+            break
+    return batches
+
+
+def dry_run_timing(project_dir: Path) -> dict:
+    """Time three real training batches so the agent can estimate the whole run.
+
+    The first batch is a warm-up and is not timed, so one-off costs (the first CUDA
+    kernel launch, cuDNN's algorithm search, the first reads off the tensor cache) stay
+    out of the number. Writes `dry_run.json` and nothing else: no metrics.json, no
+    checkpoint, no figure.
+    """
+    config = read_json(project_dir / CONFIG_FILE, default={}) or {}
+    data = load_data(project_dir, config)
+    batch_size = int(config.get("batch_size", 32))
+    seed = int(config.get("seed", 42))
+    device = pick_device()
+    torch.manual_seed(seed)
+    model = build_model(config, len(data["classes"]), data["image_size"]).to(device)
+    loss_fn = nn.CrossEntropyLoss()
+    optimiser = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=float(config.get("learning_rate", 0.001)),
+        weight_decay=float(config.get("weight_decay", 0.0001)),
+    )
+    loader = make_loader(data["train"], batch_size, shuffle=True, seed=seed)
+    generator = torch.Generator().manual_seed(seed)
+    augment = str(config.get("augment", "basic")) != "none"
+    batches_per_epoch = len(loader)
+
+    def step(batch) -> None:
+        batch_x, batch_y = batch
+        if augment:
+            batch_x = augment_batch(batch_x, generator)
+        batch_x = batch_x.to(device)
+        batch_y = batch_y.to(device)
+        optimiser.zero_grad(set_to_none=True)
+        loss = loss_fn(model(batch_x), batch_y)
+        loss.backward()
+        optimiser.step()
+
+    batches = _dry_batches(loader, DRY_RUN_BATCHES + 1)
+    if not batches:
+        raise ValueError("the training split has no batches to time")
+    model.train()
+    step(batches[0])                                   # warm-up, not timed
+    if device == "cuda":
+        torch.cuda.synchronize()
+    started = time.time()
+    for batch in batches[1:]:
+        step(batch)
+    if device == "cuda":
+        torch.cuda.synchronize()
+    elapsed = time.time() - started
+    timed = max(1, len(batches) - 1)
+    seconds_per_batch = round(elapsed / timed, 4)
+    gpu_name = torch.cuda.get_device_name(0) if device == "cuda" else None
+    record = {
+        "device": device,
+        "gpu_name": gpu_name,
+        "batches_per_epoch": batches_per_epoch,
+        "seconds_per_batch": seconds_per_batch,
+        "seconds_per_epoch": round(seconds_per_batch * batches_per_epoch, 4),
+        "n_train": int(data["n_train"]),
+        "script": SCRIPT_NAME,
+    }
+    write_json(project_dir / DRY_RUN_FILE, record)
+    where = f"{device} ({gpu_name})" if gpu_name else device
+    print(
+        f"Dry run: {timed} batches in {elapsed:.2f} s on {where}; about "
+        f"{seconds_per_batch:.3f} s per batch, {batches_per_epoch} batches per epoch",
+        flush=True,
+    )
+    return record
 
 
 # --- training ---
@@ -320,8 +410,18 @@ def main(argv: list[str] | None = None) -> int:
     prefer_stdlib_modules()
     parser = argparse.ArgumentParser(description="Train the network and record every epoch.")
     parser.add_argument("--project", default=".", help="project folder (default: cwd)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="time three training batches and write dry_run.json only")
     args = parser.parse_args(argv)
     project_dir = Path(args.project).resolve()
+    if args.dry_run:
+        try:
+            dry_run_timing(project_dir)
+        except Exception as exc:  # noqa: BLE001 - the agent reads the exit code and stderr
+            traceback.print_exc()
+            print(f"error: {exc}", file=sys.stderr, flush=True)
+            return 1
+        return 0
     try:
         # Fresh placeholders before training starts, so a failure before the first save()
         # cannot leave a previous run's epochs or best metric on disk.
