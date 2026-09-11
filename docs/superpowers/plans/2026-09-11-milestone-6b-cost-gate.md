@@ -42,11 +42,12 @@
 4. **An over-budget suggestion bullet reads "lower" or "raise" depending on direction.** The spec's line 205 template is `"lower {key} from {current} to {proposed} — {reason}"`, but the image `batch_size` suggestion (spec line 174) proposes a *larger* value. The verb is derived: `"lower"` when `proposed < current`, `"raise"` otherwise.
 5. **`gate` is injectable through the stage constructor, mirroring `DataStage`.** `TrainStage(gate=cost_gate.gate)` and `TuneStage(gate=cost_gate.gate)` take the callable the same way `DataStage.__init__` takes `hf_load` (`mlagent/stages/data.py:71-80`), and `gate` itself takes `probes=None, dry_runner=cost.run_dry_run`. Without this, `tests/test_train_stage.py` and `tests/test_tune_stage.py` would shell out to a real dry run and read real hardware on every existing test.
 6. **A failed dry run clears any stale `last_estimate` from `cost.json`.** The spec (lines 437-438) says the estimate keys stay `None` "when `cost.json` or `last_estimate` is absent", but an earlier successful run leaves one behind; without clearing it the debrief would compare this run against a previous run's estimate.
-7. **A cost-gate stop in `TuneStage` leaves `pending` set but does not re-offer the identical proposal.** The spec (lines 356-359) says "`tune_state.json`'s `pending` key stays set so the next `prepare` call re-offers the same proposal rather than asking Claude again". `TuneStage.prepare` has no resume-a-pending-proposal branch today (`mlagent/stages/tune.py:233-313` re-diagnoses and re-proposes from scratch, overwriting `pending`), and adding one is a tuning-loop change out of this milestone's scope. The observable requirement — no `decision` is set, the stage stays incomplete, the next `orch.run()` prepares tune again — holds exactly as written.
+7. **A cost-gate stop in `TuneStage` leaves `config.json` and `pending` exactly as they were before this `prepare` call — it does not re-offer the identical proposal.** The gate runs *before* `config.json` is written and before `state["pending"]` is set (immediately after `chosen` is unpacked, ahead of the old plan's after-the-write placement), so a stop is a plain early return: nothing was mutated, so there is nothing to restore or clear. The spec (lines 356-359) says "`tune_state.json`'s `pending` key stays set so the next `prepare` call re-offers the same proposal rather than asking Claude again", which would require a resume-a-pending-proposal branch that `TuneStage.prepare` does not have today (`mlagent/stages/tune.py:233-313` re-diagnoses and re-proposes from scratch on every call), and adding one is a tuning-loop change out of this milestone's scope. The observable requirement that matters here — no `decision` is set, the stage stays incomplete, the next `orch.run()` diagnoses and proposes again, and the refused proposal is never left applied to `config.json` — holds exactly as written.
 8. **The gate is asked at most four times per `prepare`: three that offer "Edit the config first", then one that offers only Run / Stop.** The spec (lines 317-319) says "at most 3 times; on the 3rd repeat the question drops the option", which is self-contradictory read strictly. `MAX_EDITS = 3` edits, then a final non-editable ask, matches the intent ("a user cannot loop forever") and is what the test asserts.
 9. **After the first edit, the `train.cost_decision` questioner key is dropped (passed as `None`).** A Colab form answer is fixed for a whole cell run, so a form answer of "Edit the config first" would be returned forever. This is the same fix `TuneStage._choose` already applies to `tune.action` (`mlagent/stages/tune.py:387-390, 413`).
 10. **`tabular_sklearn/train.py::train` loses its `dry_run` parameter.** Today `main` routes the dry run through `train(project_dir, dry_run=True)`, which returns a fake metrics dict (`mlagent/templates/tabular_sklearn/train.py:184-186, 300`). The new `dry_run.json` contract has nothing to do with a metrics dict, so `main` calls `dry_run_timing(project_dir)` directly and `train(project_dir) -> dict` only ever does a real run. Nothing outside the script calls `train`.
 11. **`COST_FILE` and `DRY_RUN_FILE` are added to `mlagent/config.py`** alongside the other file-name constants, replacing the removed `DEFAULT_RATES` / `PRICE_PER_100_UNITS_USD`, so `runs.py` can read `cost.json` without importing `cost.py`.
+12. **After a failed dry run, the gate asks Run / Stop without the Edit option.** `mlagent/stages/cost_gate.py::gate` calls `_ask(ctx, allow_edit=False, key=DECISION_KEY)` on the `dry.error` branch: there is no measured `seconds_per_epoch` to re-estimate an edited config against, so offering "Edit the config first" would have nothing to recompute from. The spec's instruction to "skip straight to the confirm" (Section 3) is implemented exactly this way.
 
 ## File Structure
 
@@ -67,7 +68,7 @@
 | `tests/test_cost.py` (new) | Every pure function in `cost.py` |
 | `tests/test_template_dry_run.py` (new) | Both templates run for real with `--dry-run` as CPU subprocesses |
 | `tests/test_cost_gate.py` (new) | The gate's paths with injected probes and dry runner |
-| `tests/test_config.py`, `tests/test_orchestrator.py`, `tests/test_runs.py`, `tests/test_train_stage.py`, `tests/test_tune_stage.py`, `tests/test_template_train.py`, `tests/test_pipeline_e2e.py`, `tests/test_pipeline_e2e_images.py`, `tests/test_colab.py` | Modified |
+| `tests/test_config.py`, `tests/test_orchestrator.py`, `tests/test_runs.py`, `tests/test_train_stage.py`, `tests/test_tune_stage.py`, `tests/test_template_train.py`, `tests/test_pipeline_e2e.py`, `tests/test_pipeline_e2e_images.py`, `tests/test_colab.py`, `tests/test_report_stage.py` | Modified |
 
 ---
 
@@ -240,15 +241,18 @@ def test_read_dry_run_of_broken_json_is_zeroed_with_an_error(tmp_path):
     assert dry.error is not None and "dry_run.json" in dry.error
 ```
 
-Replace `tests/test_config.py` entirely (it is 10 lines today, two of which assert the removed constants):
+`tests/test_config.py` is 9 lines today, in one test named `test_defaults_are_sane`; only its
+last two assertions test the constants this task removes. Keep the file's name and its first
+three assertions unchanged, drop the `DEFAULT_RATES` / `PRICE_PER_100_UNITS_USD` assertions,
+and add the two new ones:
 
 ```python
 from mlagent import config
 
 
-def test_constants_are_sane():
-    assert config.MODEL_ID
-    assert config.MAX_TOKENS > 0
+def test_defaults_are_sane():
+    assert config.MODEL_ID.startswith("claude-")
+    assert config.MAX_TOKENS >= 4096
     assert config.EFFORT in {"low", "medium", "high", "xhigh", "max"}
     assert config.COST_FILE == "cost.json"
     assert config.DRY_RUN_FILE == "dry_run.json"
@@ -259,7 +263,7 @@ def test_constants_are_sane():
 ```
 python -m pytest tests/test_cost.py tests/test_config.py -q
 ```
-Expected: collection of `tests/test_cost.py` aborts with `ModuleNotFoundError: No module named 'mlagent.cost'`, and `tests/test_config.py::test_constants_are_sane` fails with `AttributeError: module 'mlagent.config' has no attribute 'COST_FILE'`.
+Expected: collection of `tests/test_cost.py` aborts with `ModuleNotFoundError: No module named 'mlagent.cost'`, and `tests/test_config.py::test_defaults_are_sane` fails with `AttributeError: module 'mlagent.config' has no attribute 'COST_FILE'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -299,7 +303,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -435,8 +438,8 @@ def read_dry_run(path: Path) -> DryRunResult:
     )
 ```
 
-`sys` is imported here because Task 2 adds `run_dry_run(project_dir, python=sys.executable, ...)`
-to the same module; leave the import in place.
+Task 1 does not import `sys`: nothing above uses it. Task 2 adds `import sys` when it adds
+`run_dry_run(project_dir, python=sys.executable, ...)` to the same module.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -781,7 +784,10 @@ Expected: `29 failed, 18 passed`. Collection succeeds — the appended module-le
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add `import math` to `mlagent/cost.py`'s imports (alphabetically after `json`), then append to the end of the module:
+Add `import math` to `mlagent/cost.py`'s imports (alphabetically after `json`, before `subprocess`)
+and `import sys` (alphabetically after `subprocess`, at the end of the stdlib imports) — this is
+where `run_dry_run` first uses `sys.executable` as its default `python` argument — then append to
+the end of the module:
 
 ```python
 # --- the estimate ---
@@ -1157,14 +1163,16 @@ def test_the_tabular_dry_run_writes_the_whole_contract(clean_project, config):
     assert_wrote_nothing_else(root)
 
 
-def test_the_tabular_dry_run_prints_one_human_line(clean_project):
+def test_the_tabular_dry_run_prints_a_human_line(clean_project):
     root = install(clean_project, TABULAR_TEMPLATE, GB)
     proc = run(root, "--dry-run")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     lines = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
-    assert len(lines) == 1
-    assert lines[0].startswith("Dry run: 3 batches in ")
-    assert "s per batch" in lines[0] and "batches per epoch" in lines[0]
+    # Asserting on the last non-blank line, not that it is the only line: a stricter
+    # exactly-one-line assertion is brittle against any incidental print (warnings,
+    # library banners) that lands on stdout ahead of it.
+    assert lines[-1].startswith("Dry run: 3 batches in ")
+    assert "s per batch" in lines[-1] and "batches per epoch" in lines[-1]
 
 
 def test_a_broken_tabular_dry_run_exits_non_zero_with_the_error_on_stderr(clean_project):
@@ -1185,14 +1193,14 @@ def test_the_tabular_dry_run_section_is_in_the_walkthrough():
     assert "Dry run" in titles
 ```
 
-Delete `tests/test_template_train.py:86-116` — `test_dry_run_prints_timing_and_writes_nothing` and the parametrized `test_dry_run_works_for_every_family`, both of which assert the old stdout-JSON contract. Their replacement is `tests/test_template_dry_run.py`'s parametrized test above, which covers the same three families.
+Delete `tests/test_template_train.py:86-113` — `test_dry_run_prints_timing_and_writes_nothing` (86-93) and the parametrized `test_dry_run_works_for_every_family` (96-113), both of which assert the old stdout-JSON contract. (Line 116 begins the next test, `test_linear_run_config_has_no_iters_per_epoch_key`, and must stay.) Their replacement is `tests/test_template_dry_run.py`'s parametrized test above, which covers the same three families.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 ```
 python -m pytest tests/test_template_dry_run.py -q
 ```
-Expected: `5 failed` — the three parametrized cases and `test_the_tabular_dry_run_prints_one_human_line` fail at `record(root)` / the stdout check with `FileNotFoundError: ... dry_run.json` (today's `dry_run_timing` prints JSON and writes nothing), and `test_the_tabular_dry_run_section_is_in_the_walkthrough` fails with `AssertionError: assert 'Dry run' in ['settings', 'captions', 'small helpers', ...]`. `test_a_broken_tabular_dry_run_exits_non_zero_with_the_error_on_stderr` already passes.
+Expected: `5 failed` — the three parametrized cases and `test_the_tabular_dry_run_prints_a_human_line` fail at `record(root)` / the stdout check with `FileNotFoundError: ... dry_run.json` (today's `dry_run_timing` prints JSON and writes nothing), and `test_the_tabular_dry_run_section_is_in_the_walkthrough` fails with `AssertionError: assert 'Dry run' in ['settings', 'captions', 'small helpers', ...]`. `test_a_broken_tabular_dry_run_exits_non_zero_with_the_error_on_stderr` already passes.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -1209,9 +1217,11 @@ DRY_RUN_FILE = "dry_run.json"
 DRY_RUN_BATCHES = 3
 ```
 
-Replace lines 164-186 (the `# --- training ---` marker, `dry_run_timing`, and `train`'s
-first three lines) with a `# --- Dry run ---` section followed by the unchanged
-`# --- training ---` section:
+Replace lines 164-188 (the `# --- training ---` marker, `dry_run_timing`, `train`'s
+`if dry_run: return dry_run_timing(project_dir)` and its blank line, and the
+`config = read_json(...)` line that follows) with a `# --- Dry run ---` section followed by
+the unchanged `# --- training ---` section — the replacement block below ends with that same
+`config = read_json(...)` line so `train`'s body is not left duplicated or missing it:
 
 ```python
 # --- Dry run ---
@@ -1362,14 +1372,14 @@ def test_the_image_dry_run_writes_the_whole_contract(clean_image_project):
     assert_wrote_nothing_else(root)
 
 
-def test_the_image_dry_run_prints_one_human_line(clean_image_project):
+def test_the_image_dry_run_prints_a_human_line(clean_image_project):
     root = install(clean_image_project, IMAGE_TEMPLATE, TINY_CNN)
     proc = run(root, "--dry-run")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     lines = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
-    assert len(lines) == 1
-    assert lines[0].startswith("Dry run: 3 batches in ")
-    assert "on cpu;" in lines[0] and "3 batches per epoch" in lines[0]
+    # Last non-blank line, not the only line -- see the tabular test's comment above.
+    assert lines[-1].startswith("Dry run: 3 batches in ")
+    assert "on cpu;" in lines[-1] and "3 batches per epoch" in lines[-1]
 
 
 def test_the_image_dry_run_leaves_the_model_untrained_on_disk(clean_image_project):
@@ -1589,7 +1599,7 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 ### Task 5: A `None` handoff skips the debrief, and runs carry their estimate
 
 **Files:**
-- Modify: `mlagent/orchestrator.py:150`, `mlagent/runs.py:14-20` (imports/constants), `:30-50` (`build_run_entry`), `:128-151` (`log_finished_run`), plus a new `estimate_vs_actual` after `build_run_entry`
+- Modify: `mlagent/orchestrator.py:150`, `mlagent/runs.py:30-50` (`build_run_entry`), `:128-151` (`log_finished_run`), plus a new `estimate_vs_actual` after `build_run_entry` — no import changes: `cfg` and `Project` are already imported at `runs.py:14-15`
 - Test: `tests/test_orchestrator.py` (append), `tests/test_runs.py` (append)
 
 **Interfaces:**
@@ -1718,7 +1728,7 @@ writes a matching `metrics.json` and `eval_val.json` so `run_problem` returns `N
 ```
 python -m pytest tests/test_orchestrator.py tests/test_runs.py -q
 ```
-Expected: five failures.
+Expected: eight failures (1 orchestrator + 4 estimate + 3 `estimate_vs_actual`).
 `test_a_prepare_that_returns_no_handoff_never_reaches_debrief` fails on
 `assert stage.debriefed == 0` (it is `1` — `mlagent/orchestrator.py:150` calls
 `stage_debrief` unconditionally). The four estimate tests fail with
@@ -1858,7 +1868,7 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 - Test: `tests/test_cost_gate.py`
 
 **Interfaces:**
-- Consumes (Tasks 1-2): `cost.load_rates()`, `cost.detect_runtime(probes)`, `cost.run_dry_run(project_dir, python=sys.executable, timeout=600, env=None)`, `cost.DryRunResult`, `cost.estimate_from_dry_run(dry, epochs, runtime, rates, price, currency, rounds)`, `cost.estimate_from_history(seconds_per_epoch, epochs, runtime, rates, price, currency, rounds)`, `cost.budget_check(estimate, minutes_per_run, config, schema, modality)`, `cost.render_estimate(estimate, advice, spec_gpu, modality, basis_run_id=None)`. Existing repo symbols: `config.CONFIG_FILE`/`COST_FILE`, `modality_for(task_type)` (`mlagent/modality.py:110`), `load_schema(name)` / `schema_for(schema, model_type)` / `edit_config(questioner, config, schema, display)` (`mlagent/templates_io.py:36`, `:44`, `:220`), `read_runs(path)` (`mlagent/runlog.py:19`), `read_run_metrics(project, runs)` (`mlagent/runs.py:88`), `StageContext.spec()` / `.project` / `.questioner` / `.display` (`mlagent/stages/base.py:89-105`), `Questioner.number(prompt, default, minimum, maximum, key)` / `.text(prompt, default, key)` / `.choice(question, options, allow_other, key, default)` (`mlagent/ui/questions.py:9-27`).
+- Consumes (Tasks 1-2): `cost.load_rates()`, `cost.detect_runtime(probes)`, `cost.run_dry_run(project_dir, python=sys.executable, timeout=600, env=None)`, `cost.DryRunResult`, `cost.estimate_from_dry_run(dry, epochs, runtime, rates, price, currency, rounds)`, `cost.estimate_from_history(seconds_per_epoch, epochs, runtime, rates, price, currency, rounds)`, `cost.budget_check(estimate, minutes_per_run, config, schema, modality)`, `cost.render_estimate(estimate, advice, spec_gpu, modality, basis_run_id=None)`. Existing repo symbols: `config.CONFIG_FILE`/`COST_FILE`, `modality_for(task_type)` (`mlagent/modality.py:110`), `load_schema(name)` / `schema_for(schema, model_type)` / `edit_config(questioner, config, schema, display)` (`mlagent/templates_io.py:36`, `:44`, `:220`), `read_runs(path)` (`mlagent/runlog.py:19`), `read_run_metrics(project, runs)` (`mlagent/runs.py:87`), `StageContext.spec()` / `.project` / `.questioner` / `.display` (`mlagent/stages/base.py:89-105`), `Questioner.number(prompt, default, minimum, maximum, key)` / `.text(prompt, default, key)` / `.choice(question, options, allow_other, key, default)` (`mlagent/ui/questions.py:9-27`).
 - Produces (used by Task 7):
   - `cost_gate.gate(ctx, *, rounds_remaining: int, probes=None, dry_runner=cost.run_dry_run) -> str` returning `"run"` or `"stop"`
   - `cost_gate.RUN_LABEL = "Run it"`, `EDIT_LABEL = "Edit the config first"`, `STOP_LABEL = "Stop"`, `MAX_EDITS = 3`, `STOP_TEXT`, `NO_ESTIMATE_TEXT`, `TIMING_TEXT`
@@ -2319,7 +2329,7 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 
 **Files:**
 - Modify: `mlagent/stages/train.py:7-14` (imports), `:25-27` (add `__init__`), `:38-80` (`prepare`), `:121-131` (`_narrative`'s headline); `mlagent/stages/tune.py:29-45` (imports), `:218-220` (add `__init__`), `:310-313` (the gate before the `Handoff`), `:493-494` (the debrief headline)
-- Test: `tests/test_train_stage.py`, `tests/test_tune_stage.py`, `tests/test_pipeline_e2e.py`, `tests/test_pipeline_e2e_images.py`
+- Test: `tests/test_train_stage.py`, `tests/test_tune_stage.py`, `tests/test_pipeline_e2e.py`, `tests/test_pipeline_e2e_images.py`, `tests/test_report_stage.py`
 
 **Interfaces:**
 - Consumes (Tasks 5-6): `cost_gate.gate(ctx, *, rounds_remaining, probes=None, dry_runner=cost.run_dry_run) -> str`, `cost_gate.STOP_TEXT`, `runs.estimate_vs_actual(entry) -> str | None`. Existing repo symbols: `Spec.max_rounds` / `.minutes_per_run` / `.gpu` (`mlagent/spec.py:24-35`), `Handoff` (`mlagent/stages/base.py:29`), `load_tune_state(project, max_rounds)` returning a dict with `round`, `max_rounds`, `decision`, `pending`, `history` (`mlagent/stages/tune.py`).
@@ -2361,9 +2371,17 @@ in place so the gate never asks for one, by adding this line to each, just befor
     project.write_json("cost.json", {"price_per_unit": 0.0999, "currency": "$"})
 ```
 
-Replace every bare `TrainStage()` in the file with `TrainStage(gate=cpu_gate())`
-(`tests/test_train_stage.py` lines 67, 103, 127, 139, 154, 162 — six call sites), and
-replace the 6a placeholder assertion at line 74:
+Every bare `TrainStage()` in `tests/test_train_stage.py` and in `tests/test_report_stage.py`
+(its `trained()` helper around line 34 calls `stage.prepare(ctx)`) must construct the stage with
+the fake gate; grep `TrainStage(` in `tests/` to find them all and replace each with
+`TrainStage(gate=cpu_gate())` (or an equivalent no-hardware fake gate imported into
+`tests/test_report_stage.py`). This matters because a bare `TrainStage()` would run
+`cost.detect_runtime()` on the machine's real hardware, shell out a real `train.py --dry-run`
+subprocess, and call `questioner.number` on a `ScriptedQuestioner` that has no answer queued for
+it — failing or hanging every one of these tests. Also have `test_report_stage.py`'s `trained()`
+helper write `cost.json` with a price and currency (the same fixture line
+`tests/test_train_stage.py`'s `prepared`/`prepared_image` fixtures use, see below) so the gate
+never asks a question there either. Then replace the 6a placeholder assertion at line 74:
 
 ```python
     assert "cost" in text.lower() and "cpu" in text.lower()
@@ -2559,13 +2577,19 @@ def test_the_gate_estimates_before_training_and_the_debrief_compares_afterwards(
 In `tests/test_pipeline_e2e_images.py`, make exactly the same three `FORM_ANSWERS`
 additions, the same `E2E_GATE = partial(cost_gate.gate, probes=())` and the same
 `TrainStage(gate=E2E_GATE)` / `TuneStage(gate=E2E_GATE)` construction, plus a `display`
-parameter on its `make_orchestrator`, and append:
+parameter on its `make_orchestrator`.
+
+Do not add a second full-pipeline test here: the file already has exactly one real image
+training run, `test_the_image_pipeline_runs_through_every_handoff`, and it keeps that run
+fast by calling `advance_to_codegen` + `small_config(project)` (`epochs=2`) before resuming
+with the plain `advance` fixture (lines 105-110). A second test built on the plain `advance`
+fixture alone would run codegen's *default* epochs (10) through a real CPU CNN training
+subprocess a second time in the same file — slow and redundant. Instead, extend the existing
+test: pass `display=shown.append` into its `make_orchestrator(project)` call, keep the same
+`advance_to_codegen` / `small_config` / `advance` sequence, and add these assertions after the
+existing ones:
 
 ```python
-def test_the_image_gate_times_a_real_dry_run_on_the_cpu(project, advance):
-    shown: list[str] = []
-    orch = make_orchestrator(project, display=shown.append)
-    assert advance(orch, project, answers=FORM_ANSWERS) == ALL_STAGES
     text = "\n".join(shown)
     assert "Timing a short dry run..." in text
     assert "This runtime has no [[GPU]]." in text
@@ -2648,17 +2672,27 @@ In `_narrative`, replace the `return` (line 131) with:
 (the existing `narrative = ...` line at 130 moves below the comparison so the headline is
 finished before it is used; nothing else in `_narrative` changes).
 
-In `mlagent/stages/tune.py`, add to the `from mlagent.runs import (...)` block (lines 29-35):
+In `mlagent/stages/tune.py`, add to the `from mlagent.runs import (...)` block (lines 29-35),
+in alphabetical order between `archive_metrics` and `log_finished_run`:
 
 ```python
+    archive_metrics,
     estimate_vs_actual,
+    log_finished_run,
 ```
 
-and add after the `from mlagent.stages.base import ...` line:
+and add `from mlagent.stages import cost_gate` as its own line *before* the existing
+`from mlagent.stages.base import ...` line, not after — isort (ruff I001) sorts
+`mlagent.stages` ahead of `mlagent.stages.base` (the shorter dotted path sorts first):
 
 ```python
 from mlagent.stages import cost_gate
+from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 ```
+
+(`mlagent/stages/train.py`'s edit above already inserts `from mlagent.stages import cost_gate`
+ahead of its own `from mlagent.stages.base import ...` line, so no change is needed there —
+call this out explicitly so Task 7 does not repeat tune.py's ordering mistake in train.py.)
 
 Add a constructor to `TuneStage`, immediately under `name = "tune"`:
 
@@ -2667,22 +2701,49 @@ Add a constructor to `TuneStage`, immediately under `name = "tune"`:
         self.gate = gate
 ```
 
-Replace lines 310-313 with:
+The gate must run *before* `config.json` and `pending` are mutated, not after: the code at
+lines 296-297 (`new_config, diff, reason = chosen` / `project.write_json(cfg.CONFIG_FILE,
+new_config)`) already applies the proposal to disk before the old plan text's gate call, so a
+cost-gate stop there would leave the refused proposal sitting in `config.json` and the next
+`prepare` would diagnose and propose against the *mutated* config. Move the gate immediately
+after `chosen` is unpacked and before anything is written, keeping `config` (read at line 245,
+still the pre-proposal config — `chosen`/`new_config` does not mutate it) so a stop can restore
+it unchanged. Replace lines 296-313 with:
 
 ```python
+        new_config, diff, reason = chosen
+        if self.gate(ctx, rounds_remaining=state["max_rounds"] - round_no) == "stop":
+            # Not a tuning decision: `decision` stays "continue" so the next orch.run()
+            # diagnoses and proposes again. Nothing was written yet, so config.json and
+            # tune_state.json are already untouched -- nothing to restore.
+            return None
+        project.write_json(cfg.CONFIG_FILE, new_config)
+        state["pending"] = {
+            "round": round_no,
+            "applied_diff": diff,
+            "reason": reason,
+            "diagnosis": diagnosis.label,
+            "proposed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        project.write_json(cfg.TUNE_STATE_FILE, state)
+        # The cells regenerate these; a stale copy must not satisfy outputs_ready.
+        (project.root / cfg.METRICS_FILE).unlink(missing_ok=True)
+        (project.root / EVAL_VAL_FILE).unlink(missing_ok=True)
         changed = ", ".join(f"`{k}` {_fmt(v['from'])} -> {_fmt(v['to'])}" for k, v in diff.items())
         ctx.display(f"Applied to `config.json`: {changed}. Run the `train.py` and "
                     "`evaluate.py` cells again, then run this cell to see whether it helped.")
-        # A cost-gate stop is not a tuning decision: `decision` stays "continue" and
-        # `pending` stays set, so the stage is still incomplete and the next orch.run()
-        # prepares this stage again.
-        if self.gate(ctx, rounds_remaining=state["max_rounds"] - round_no) == "stop":
-            return None
         return Handoff(stage=self.name, commands=[list(c) for c in TUNE_COMMANDS],
                        outputs=list(TUNE_OUTPUTS))
 ```
 
-(the `changed = ...` line already exists at 309; it is shown for context and is unchanged.)
+With the gate moved ahead of the writes, a stop is simply a return before anything changes — there
+is no `config.json` or `pending` to restore. (An earlier draft of this plan put the gate after the
+write and `pending` assignment, which would have required restoring `config.json` from the
+pre-proposal `config` and clearing `pending` on a stop; moving the gate earlier avoids that
+entirely.) Add a test in Task 7's tune tests asserting that after a cost-gate stop, `config.json`
+on disk is byte-for-byte the pre-proposal config (i.e. unchanged from before `prepare` ran) and
+`tune_state.json`'s `pending` is still whatever it was before this `prepare` call (`None` on a
+fresh round).
 
 Replace `debrief`'s display (lines 493-494) with:
 
@@ -2704,7 +2765,9 @@ python -m pytest tests/test_pipeline_e2e_images.py -q
 ruff check .
 ```
 Expected: all pass, ruff clean. `tests/test_train_stage.py` gains four tests,
-`tests/test_tune_stage.py` three, each e2e file one.
+`tests/test_tune_stage.py` three, `tests/test_pipeline_e2e.py` one new test;
+`tests/test_pipeline_e2e_images.py` gains no new test (its existing full-run test grows
+new assertions instead, per the note above).
 
 ```
 python -m pytest -q
@@ -2732,7 +2795,7 @@ Claude-Session: https://claude.ai/code/session_01DjW1P51vebWfHUZqQ2fW3c"
 ### Task 8: The notebook's price fields, the smoke checklist and CLAUDE.md
 
 **Files:**
-- Modify: `scripts/build_notebook.py:127-129` (the `MINUTES_PER_RUN` hint), `:252-266` (the "4. Model" cell), `notebooks/ML_Training_Agent.ipynb` (regenerated), `docs/colab-smoke.md` (new section at the end), `CLAUDE.md:7`, `:11-24`, `:31`, `:34`, `:36`
+- Modify: `scripts/build_notebook.py:127-129` (the `MINUTES_PER_RUN` hint), `:252-266` (the "4. Model" cell), `notebooks/ML_Training_Agent.ipynb` (regenerated), `docs/colab-smoke.md` (new section at the end, plus the Milestone 3 item ~line 30), `CLAUDE.md:7`, `:11-24`, `:31`, `:34`, `:36`, `pyproject.toml:33` (package-data)
 - Test: `tests/test_colab.py`
 
 **Interfaces:**
@@ -2885,6 +2948,10 @@ Append a new section to `docs/colab-smoke.md`, in the style of the Milestone 6a 
    cell ends with "Change the config and run this cell again, or switch runtime, then run
    this cell again.", `orch.waiting()` returns `None`, and no `metrics.json` was written.
    Edit `config.json` by hand and run *4. Model* again: the gate asks its question again.
+   Also try this in a tune round: on step 6's project apply a proposal that would be
+   over budget and choose *Stop* at the gate. `config.json` still reads exactly what it did
+   before the proposal — the refused proposal is not applied — and `tune_state.json`'s
+   `pending` is unchanged (still `None` for a fresh round).
 6. **A tune round estimates from history.** On step 2's project run *6. Tune*, apply
    proposal 1. The basis line reads "From run 1's measured time." and **no** dry run
    runs. `runs.jsonl`'s second entry carries `estimated_minutes` and `estimated_units`.
@@ -2905,6 +2972,31 @@ Update `CLAUDE.md`:
 - Line 34 (the generated-scripts paragraph): after the `cli_argv()` sentence, add: "Both `train.py` templates also take `--dry-run`, which times a warm-up batch plus three real training batches and writes `dry_run.json` (`device`, `gpu_name`, `batches_per_epoch`, `seconds_per_batch`, `seconds_per_epoch`, `n_train`, `script`) — no `metrics.json`, no checkpoint, no figure — and is the one place a generated script may exit non-zero."
 - Line 36 (the pure-modules paragraph): add `cost.py` (rates, `detect_runtime`, the estimate formula, `budget_check`, `render_estimate`) to the list of pure, unit-tested modules.
 
+Package `mlagent/rates.json` so a plain `pip install .` ships it: add `"rates.json"` to
+`[tool.setuptools.package-data]` in `pyproject.toml` (currently `mlagent = ["prompts/**/*.md",
+"templates/*/*"]`):
+
+```toml
+[tool.setuptools.package-data]
+mlagent = ["prompts/**/*.md", "templates/*/*", "rates.json"]
+```
+
+Check it with:
+
+```
+python -c "from mlagent.cost import load_rates; print(load_rates()['units_per_hour']['T4'])"
+```
+Expected: prints the T4 rate with no `FileNotFoundError`. (This check is meaningful once
+the package is actually installed, e.g. inside `python -m pip install -e ".[dev]"` — add a
+one-line note in this step that the editable install already picks up `rates.json` from the
+source tree either way, so this check mainly guards a future non-editable / wheel install.)
+
+Update `docs/colab-smoke.md`'s existing Milestone 3 item (~line 30) that currently says the
+train stage prints a note about "no cost gate on CPU": rewrite it to describe the new estimate
+line instead — the debrief headline now ends with "Estimated N min, actual M min (P%
+under/over)." rather than a CPU-only disclaimer, since the cost gate (Milestone 6b) replaces
+that note.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 ```
@@ -2912,14 +3004,15 @@ python scripts/build_notebook.py
 python -m pytest tests/test_colab.py -q
 python -m pytest -q
 ruff check .
+python -c "from mlagent.cost import load_rates; print(load_rates()['units_per_hour']['T4'])"
 ```
 Expected: the builder prints `wrote ... (21 cells)`; `tests/test_colab.py` passes with its
-seven new tests; the whole suite is green; ruff clean.
+seven new tests; the whole suite is green; ruff clean; the rates check prints a number.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/build_notebook.py notebooks/ML_Training_Agent.ipynb tests/test_colab.py docs/colab-smoke.md CLAUDE.md
+git add scripts/build_notebook.py notebooks/ML_Training_Agent.ipynb tests/test_colab.py docs/colab-smoke.md CLAUDE.md pyproject.toml
 git commit -m "feat: price and currency fields in the 4. Model cell, smoke checklist and docs
 
 The 4. Model cell gains PRICE_PER_UNIT and CURRENCY with beginner hints and
