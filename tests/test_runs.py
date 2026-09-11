@@ -150,3 +150,54 @@ def test_log_finished_run_records_the_pt_checkpoint(project):
     assert logged is not None and logged.new is True
     assert logged.entry["checkpoint"] == "checkpoints/run1.pt"
     assert (project.checkpoints_dir / "run1.pt").exists()
+
+
+def test_build_run_entry_defaults_the_estimate_keys_to_none():
+    entry = runs.build_run_entry({"status": "done", "started_at": "t", "epochs": []})
+    assert entry["estimated_minutes"] is None
+    assert entry["estimated_units"] is None
+
+
+def test_build_run_entry_carries_the_estimate_through():
+    entry = runs.build_run_entry({"status": "done", "started_at": "t", "epochs": []},
+                                 estimated_minutes=3.1, estimated_units=0.21)
+    assert entry["estimated_minutes"] == 3.1 and entry["estimated_units"] == 0.21
+
+
+def test_logging_a_run_reads_the_estimate_out_of_cost_json(project):
+    write_fake_run(project)
+    project.write_json("cost.json", {
+        "price_per_unit": 0.0999, "currency": "$",
+        "last_estimate": {"minutes": 3.1, "units": 0.21, "basis": "dry_run"},
+    })
+    logged = runs.log_finished_run(project)
+    assert logged is not None
+    assert logged.entry["estimated_minutes"] == 3.1
+    assert logged.entry["estimated_units"] == 0.21
+
+
+def test_logging_a_run_without_cost_json_leaves_the_estimate_none(project):
+    write_fake_run(project)
+    logged = runs.log_finished_run(project)
+    assert logged is not None
+    assert logged.entry["estimated_minutes"] is None
+    assert logged.entry["estimated_units"] is None
+
+
+def test_estimate_vs_actual_reports_the_percentage_under():
+    entry = {"estimated_minutes": 3.1, "seconds": 162.0}   # 2.7 minutes
+    assert runs.estimate_vs_actual(entry) == (
+        "Estimated 3.1 min, actual 2.7 min (13% under).")
+
+
+def test_estimate_vs_actual_reports_the_percentage_over():
+    entry = {"estimated_minutes": 2.0, "seconds": 150.0}   # 2.5 minutes
+    assert runs.estimate_vs_actual(entry) == (
+        "Estimated 2.0 min, actual 2.5 min (25% over).")
+
+
+def test_estimate_vs_actual_is_omitted_when_there_is_no_estimate():
+    assert runs.estimate_vs_actual({"estimated_minutes": None, "seconds": 60.0}) is None
+    assert runs.estimate_vs_actual({"seconds": 60.0}) is None
+    assert runs.estimate_vs_actual({"estimated_minutes": 3.0, "seconds": None}) is None
+    assert runs.estimate_vs_actual({"estimated_minutes": 0, "seconds": 60.0}) is None

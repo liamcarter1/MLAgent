@@ -112,6 +112,58 @@ def test_reset_drops_later_stages(project):
     assert orch.run() == ["b", "c"]
 
 
+class GatedStage:
+    """A stage whose prepare() refuses to hand off, the way a cost-gate stop does."""
+
+    name = "gated"
+
+    def __init__(self):
+        self.prepared = 0
+        self.debriefed = 0
+
+    def prepare(self, ctx):
+        self.prepared += 1
+        ctx.display("Stop: change the config and run this cell again.")
+        return None
+
+    def debrief(self, ctx):
+        self.debriefed += 1
+        ctx.display("I can't see a finished run in metrics.json yet.")
+        return None
+
+    def is_complete(self, ctx):
+        return False
+
+
+def test_a_prepare_that_returns_no_handoff_never_reaches_debrief(project):
+    shown: list[str] = []
+    ctx = make_ctx(project, display=shown.append)
+    stage = GatedStage()
+    orch = Orchestrator(ctx, [stage])
+
+    assert orch.run() == []
+    assert stage.prepared == 1
+    assert stage.debriefed == 0
+    assert orch.waiting() is None
+    assert not any("metrics.json" in s for s in shown)
+    assert any("Stop: change the config" in s for s in shown)
+
+
+def test_the_stage_stays_current_and_unprepared_after_a_no_handoff_round(project):
+    ctx = make_ctx(project)
+    stage = GatedStage()
+    orch = Orchestrator(ctx, [stage])
+    orch.run()
+    state = project.read_json("state.json")
+    assert state["current"] == "gated"
+    assert state["completed"] == [] and state["prepared"] == []
+    assert state["handoff"] is None
+
+    # The next run() prepares it again rather than resuming a handoff that never existed.
+    orch.run()
+    assert stage.prepared == 2 and stage.debriefed == 0
+
+
 def test_stage_with_artifact_but_no_state_is_skipped(project):
     project.write_json("a.json", {"ok": True})
     a, b = RecordingStage("a"), RecordingStage("b")

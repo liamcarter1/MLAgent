@@ -147,7 +147,12 @@ class Orchestrator:
                     if handoff is not None and not stage_outputs_ready(stage, self.ctx, handoff):
                         self.ctx.display(waiting_message(handoff))
                         return ran
-                    if not stage_debrief(stage, self.ctx):
+                    # No handoff means the round produced nothing for a debrief to read:
+                    # `TrainStage`/`TuneStage.debrief` would call `runs.run_problem` on a
+                    # stale metrics.json and print "I can't see a finished run" under the
+                    # cost gate's own stop message. Behaviour-preserving for the stages
+                    # that already return None here (intake and codegen debrief to None).
+                    if handoff is None or not stage_debrief(stage, self.ctx):
                         break
                     # The stage asked to go round again: forget this handoff and prepare
                     # afresh, so the next proposal appears right under this debrief.

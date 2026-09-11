@@ -28,9 +28,14 @@ class LoggedRun:
 
 
 def build_run_entry(
-    metrics: dict, checkpoint: str | None = None, applied_diff: dict | None = None
+    metrics: dict, checkpoint: str | None = None, applied_diff: dict | None = None,
+    estimated_minutes: float | None = None, estimated_units: float | None = None,
 ) -> dict:
-    """One `runs.jsonl` line, derived from the metrics.json that train.py wrote."""
+    """One `runs.jsonl` line, derived from the metrics.json that train.py wrote.
+
+    `estimated_minutes` / `estimated_units` come from the cost gate's `cost.json`
+    `last_estimate`; both stay None when no estimate was made (the dry run failed).
+    """
     epochs = metrics.get("epochs") or []
     last = epochs[-1] if epochs else {}
     ok = metrics.get("status") == "done"
@@ -47,7 +52,35 @@ def build_run_entry(
         "error": metrics.get("error"),
         "applied_diff": dict(applied_diff) if applied_diff else None,
         "checkpoint": checkpoint if ok else None,
+        "estimated_minutes": estimated_minutes,
+        "estimated_units": estimated_units,
     }
+
+
+def last_estimate(project: Project) -> dict:
+    """The cost gate's most recent estimate for this project, or an empty dict."""
+    record = project.read_json(cfg.COST_FILE)
+    estimate = record.get("last_estimate") if isinstance(record, dict) else None
+    return estimate if isinstance(estimate, dict) else {}
+
+
+def estimate_vs_actual(entry: dict) -> str | None:
+    """`"Estimated 3.1 min, actual 2.7 min (13% under)."`, or None with no estimate.
+
+    Fixed text, built without an LLM call, and omitted entirely rather than showing a
+    placeholder when the gate had no estimate to make.
+    """
+    estimated = entry.get("estimated_minutes")
+    seconds = entry.get("seconds")
+    if not isinstance(estimated, int | float) or not estimated:
+        return None
+    if not isinstance(seconds, int | float):
+        return None
+    actual = float(seconds) / 60.0
+    percent = round(abs(actual - estimated) / float(estimated) * 100)
+    direction = "over" if actual > estimated else "under"
+    return (f"Estimated {float(estimated):.1f} min, actual {actual:.1f} min "
+            f"({percent}% {direction}).")
 
 
 def archive_run(project: Project, run_id: int, checkpoint: str | None = None) -> list[Path]:
@@ -147,5 +180,10 @@ def log_finished_run(project: Project, applied_diff: dict | None = None) -> Logg
     archived = project.checkpoints_dir / f"run{run_id}{relative.suffix}"
     checkpoint = f"checkpoints/run{run_id}{relative.suffix}" if ok and archived.exists() \
         else None
-    entry = append_run(project.runs_path, build_run_entry(metrics, checkpoint, applied_diff))
+    estimate = last_estimate(project)
+    entry = append_run(project.runs_path, build_run_entry(
+        metrics, checkpoint, applied_diff,
+        estimated_minutes=estimate.get("minutes"),
+        estimated_units=estimate.get("units"),
+    ))
     return LoggedRun(entry=entry, figures=figures, new=True)
