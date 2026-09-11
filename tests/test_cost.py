@@ -306,6 +306,15 @@ def test_render_names_the_source_run_for_a_history_estimate():
     assert "dry run" not in text
 
 
+def test_render_falls_back_to_a_previous_run_when_no_basis_run_id_is_given():
+    est = make_estimate(runtime=CPU, basis="history")
+    advice = cost.budget_check(est, 10, {"epochs": 10, "model_type": "gradient_boosting"},
+                               GB_SCHEMA, TABULAR)
+    text = cost.render_estimate(est, advice, "none", TABULAR)
+    assert "From a previous run's measured time." in text
+    assert "dry run" not in text
+
+
 def test_render_says_a_cpu_run_is_free():
     est = make_estimate(runtime=CPU)
     advice = cost.budget_check(est, 10, {"epochs": 10, "model_type": "gradient_boosting"},
@@ -397,6 +406,17 @@ def test_run_dry_run_reports_a_non_zero_exit_with_the_stderr_tail(tmp_path):
     assert "exit 3" in dry.error
     assert "the training split is empty" in dry.error
     assert dry.seconds_per_epoch == 0.0
+
+
+def test_run_dry_run_survives_non_utf8_bytes_on_stderr(tmp_path):
+    write_fake_train(tmp_path, (
+        "import sys\n"
+        "sys.stderr.buffer.write(b'\\xff bad\\n')\n"
+        "sys.exit(1)\n"
+    ))
+    dry = cost.run_dry_run(tmp_path, python=sys.executable, timeout=60)
+    assert dry.error is not None
+    assert "exit 1" in dry.error
 
 
 def test_run_dry_run_reports_a_script_that_wrote_nothing(tmp_path):

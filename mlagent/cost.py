@@ -340,6 +340,8 @@ def render_estimate(estimate: Estimate, advice: BudgetAdvice, spec_gpu: str, mod
 
     if estimate.basis == "history" and basis_run_id is not None:
         lines.append(f"From run {basis_run_id}'s measured time.")
+    elif estimate.basis == "history":
+        lines.append("From a previous run's measured time.")
     else:
         lines.append("Timed with a 3-batch dry run.")
     if estimate.note:
@@ -390,7 +392,8 @@ def run_dry_run(project_dir, python=sys.executable, timeout: int = DRY_RUN_TIMEO
     command = [str(python), "train.py", "--dry-run"]
     try:
         result = subprocess.run(command, cwd=str(project_dir), capture_output=True,
-                                text=True, encoding="utf-8", timeout=timeout, env=env)
+                                text=True, encoding="utf-8", errors="replace",
+                                timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return DryRunResult(error=f"The dry run did not finish within {timeout} s.")
     except OSError as exc:
