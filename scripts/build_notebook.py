@@ -200,9 +200,9 @@ cells = [
         "download, e.g. `cifar10` or `beans`.",
         "HF_DATASET = ''  #@param {type:'string'}",
         "#@markdown **MAX_IMAGES** — Image tasks, Drive and HuggingFace only. Cap on how "
-        "many pictures to use; `0` means all of them. A cap keeps your first run quick and "
-        "still keeps every class.",
-        "MAX_IMAGES = 0  #@param {type:'integer'}",
+        "many pictures to use; `0` means all of them. `2000` (the default) keeps your "
+        "first run quick and still keeps every class.",
+        "MAX_IMAGES = 2000  #@param {type:'integer'}",
         "",
         "orch.run(until='data', answers={",
         "    'data.n_rows': N_ROWS,",

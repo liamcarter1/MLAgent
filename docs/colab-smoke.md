@@ -170,3 +170,45 @@ beginner level unless an item says otherwise.
 8. **Resetting train clears the loop.** *Train again* after a tuning loop: `tune_state.json`
    disappears from Drive and the next `6. Tune` run starts at round 1 with the full history
    in its run table.
+
+## Milestone 6a: image classification
+
+Six runs, each on a fresh project name. Steps 1-5 replace the tabular answers at *1.
+Project and interview* with **TASK = Image classification**; the cell list is unchanged.
+
+1. **Synthetic shapes, end to end at beginner level, with one tune round.** TASK
+   *Image classification*, LEARNING_LEVEL *Beginner*, DATA_SOURCE *Synthetic data*,
+   N_IMAGES `300`, IMAGE_SIZE `64`, N_CLASSES `3`, INJECT_QUIRKS on. The *2. Data* cell
+   writes `data/raw/data.npz` and `manifest.csv`; `profile.py` shows four figures --
+   thumbnails, class balance, intensity, class means -- each with its caption. The audit
+   offers duplicate and blank image drops; approve them. `clean.py` writes
+   `data/clean/data.npz` and the before/after class chart. Pick *Small CNN* at *4. Model*,
+   run `train.py` and `evaluate.py`, then *6. Tune*: apply proposal 1, rerun both cells,
+   run *6. Tune* again, then answer *Stop tuning and write the report*. Confirm
+   `runs.jsonl` has two runs, `checkpoints/run2.pt` exists (note the `.pt`, not
+   `.joblib`), and `report.md`'s **Data** section says "300 images at 64x64 pixels".
+2. **Your own Drive folder, including a deliberately bad file.** Make
+   `MyDrive/smoke_images/` with two class subfolders of about 30 pictures each, plus one
+   file that is not really an image (`echo hi > MyDrive/smoke_images/catsbroken.png`) and
+   one stray picture sitting in the root with no class folder. DATA_SOURCE *Upload or
+   Google Drive path*, DRIVE_FOLDER `MyDrive/smoke_images`, MAX_IMAGES `0`. The data cell
+   must finish, saying how many files it skipped, and the audit's **unreadable_files**
+   issue must list both the broken file and the stray one with reason "no class folder".
+   Nothing crashes.
+3. **A HuggingFace dataset with a cap.** DATA_SOURCE *HuggingFace Hub dataset*,
+   HF_DATASET `beans`, IMAGE_SIZE `64`, MAX_IMAGES `300`. Confirm the download runs, the
+   cap holds (`data_meta.json`'s `raw_n_rows` is 300), and every class survives the cap
+   in the class-balance figure.
+4. **ResNet-18 with ImageNet weights on the GPU runtime.** Runtime > Change runtime type >
+   T4 GPU, then rerun from *1. Project and interview* with GPU *T4 GPU*. At *4. Model*
+   pick *Pretrained ResNet-18* and keep `pretrained: imagenet`. Confirm the weights
+   download once, `metrics.json` records `"device": "cuda"`, and one epoch is
+   substantially faster than the same model on the CPU runtime.
+5. **Expert level stays terse and still draws everything.** LEARNING_LEVEL *Expert*: no
+   preamble, no primer, no per-figure notes -- but all four profile figures and all three
+   evaluation figures (confusion, per class, misclassified) are still produced with their
+   fixed captions.
+6. **Train again after a tuning loop on an image run.** After step 1's project, edit
+   `config.json` by hand (say `epochs: 4`), run the *Train again* cell, then the two train
+   cells, then *6. Tune*. `tune_state.json` disappears and comes back at round 1, the run
+   table lists every earlier run, and the new run archives as `checkpoints/run3.pt`.

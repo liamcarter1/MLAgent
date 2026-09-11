@@ -213,3 +213,42 @@ def test_render_report_shape():
     assert "# demo: training report" in report
     assert "![test_confusion](plots/test_confusion.png)" in report
     assert "checkpoints/run1.joblib" in report
+
+
+def test_render_report_data_section_for_a_table():
+    from mlagent.stages.report import render_report
+
+    report = render_report(
+        "demo", {"goal": "g", "task_type": "tabular_classification", "metric": "accuracy",
+                 "target_value": 0.9},
+        [], None, {"metric": "accuracy", "value": 0.8}, "lessons", [],
+        meta={"clean_n_rows": 400, "clean_n_cols": 9, "n_classes": 2},
+    )
+    assert "## Data" in report
+    assert "400 rows" in report and "9 columns" in report
+
+
+def test_render_report_data_section_for_images():
+    from mlagent.stages.report import render_report
+
+    report = render_report(
+        "demo", {"goal": "g", "task_type": "image_classification", "metric": "accuracy",
+                 "target_value": 0.9},
+        [], None, {"metric": "accuracy", "value": 0.8}, "lessons", [],
+        meta={"modality": "image", "clean_n_rows": 240, "image_size": 64, "n_classes": 3,
+              "class_labels": ["cat", "dog", "fox"]},
+    )
+    assert "240 images" in report
+    assert "64x64" in report
+    assert "3 classes" in report
+
+
+def test_render_report_without_meta_omits_the_data_section():
+    from mlagent.stages.report import render_report
+
+    report = render_report(
+        "demo", {"goal": "g", "task_type": "tabular_classification", "metric": "accuracy",
+                 "target_value": 0.9},
+        [], None, {"metric": "accuracy", "value": 0.8}, "lessons", [],
+    )
+    assert "## Data" not in report

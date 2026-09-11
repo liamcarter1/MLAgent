@@ -239,6 +239,25 @@ def test_the_n_classes_hint_covers_images_too():
     assert "for images, 2 to 5" in line
 
 
+def model_cell() -> str:
+    return next(s for s in notebook_sources() if "#@title 4. Model" in s)
+
+
+def test_the_model_cell_s_image_choices_match_the_image_family_labels():
+    """A label drift between the notebook and codegen.py must never silently fall back to
+    a console prompt in Colab (input() blocks a running cell)."""
+    import re
+
+    from mlagent.stages.codegen import labels_for
+
+    source = model_cell()
+    line = next(ln for ln in source.splitlines() if ln.startswith("MODEL = "))
+    choices = re.findall(r"'([^']+)'", line.split("#@param", 1)[1])
+    tabular_and_ask = set(labels_for("tabular_sklearn")) | {"Ask me after the explanation"}
+    image_choices = [c for c in choices if c not in tabular_and_ask]
+    assert set(image_choices) == set(labels_for("image_torch"))
+
+
 def test_the_data_cell_passes_every_image_answer_key():
     source = data_cell()
     for key in ("data.n_images", "data.image_size", "data.drive_folder", "data.hf_dataset",

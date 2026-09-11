@@ -38,6 +38,17 @@ from evaluate import (
 from model import build_model
 from torch import nn
 
+# Running "python train.py" puts this script's own directory (the project folder, which
+# also holds the data stage's profile.py) first on sys.path. torch's optimiser internals
+# lazily `import cProfile`, which does `import profile` for its stdlib docstrings; left
+# first on sys.path, the project's profile.py would shadow the stdlib module and crash
+# that import. Deprioritise it before any optimiser is built (imports above already
+# resolved `data`/`model`/`evaluate` while it was still first).
+_here = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else ""
+sys.path = [p for p in sys.path if p not in ("", _here)] + [
+    p for p in sys.path if p in ("", _here)
+]
+
 # --- settings ---
 SCRIPT_NAME = "train.py"
 CONFIG_FILE = "config.json"

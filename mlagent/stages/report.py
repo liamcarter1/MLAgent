@@ -9,6 +9,7 @@ from pathlib import Path
 from mlagent import config as cfg
 from mlagent.runlog import best_run, read_runs, summarise
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
+from mlagent.stages.data import META_FILE
 
 EVAL_TEST_FILE = "eval_test.json"
 EVAL_TEST_COMMAND = ["evaluate.py", "--split", "test"]
@@ -28,8 +29,28 @@ def _run_number(path: Path) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _data_section(meta: dict) -> list[str]:
+    """One line describing the dataset the runs were trained on, per modality."""
+    if meta.get("modality") == "image":
+        size = meta.get("image_size")
+        labels = ", ".join(str(c) for c in (meta.get("class_labels") or []))
+        detail = (
+            f"{_fmt(meta.get('clean_n_rows'))} images at {size}x{size} pixels across "
+            f"{_fmt(meta.get('n_classes'))} classes"
+        )
+        if labels:
+            detail += f" ({labels})"
+    else:
+        detail = (
+            f"{_fmt(meta.get('clean_n_rows'))} rows and "
+            f"{_fmt(meta.get('clean_n_cols'))} columns after cleaning"
+        )
+    return ["## Data", "", f"Trained on {detail}.", ""]
+
+
 def render_report(project_name: str, spec: dict, runs: list[dict], best: dict | None,
-                  eval_test: dict, lessons: str, figures: list[Path]) -> str:
+                  eval_test: dict, lessons: str, figures: list[Path],
+                  meta: dict | None = None) -> str:
     metric = spec.get("metric", "")
     best_cfg = (best or {}).get("config") or {}
     lines = [
@@ -40,6 +61,10 @@ def render_report(project_name: str, spec: dict, runs: list[dict], best: dict | 
         f"**Task:** {spec.get('task_type', '')} | **Metric:** {metric} | "
         f"**Target:** {_fmt(spec.get('target_value'))}",
         "",
+    ]
+    if meta:
+        lines += _data_section(meta)
+    lines += [
         "## Run history",
         "",
         summarise(runs, metric),
@@ -196,6 +221,7 @@ class ReportStage(ScriptStageBase):
         report = render_report(
             project.name, spec.to_dict(), runs, best,
             eval_test, lessons, run_figures + test_figures,
+            meta=project.read_json(META_FILE) or {},
         )
         project.report_path.write_text(report, encoding="utf-8")
         project.write_json(

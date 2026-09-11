@@ -49,6 +49,22 @@ def guess_target(df: pd.DataFrame) -> str | None:
     return columns[-1]
 
 
+def _image_profile_markdown(profile: dict) -> str:
+    """The image counterpart to `profile.profile_markdown`: `profile_images`'s JSON has no
+    `n_rows`/`columns` keys, so the tabular formatter cannot read it."""
+    counts = ", ".join(f"{name}: {n}" for name, n in (profile.get("class_counts") or {}).items())
+    lines = [
+        f"### Data profile: {profile.get('n_images')} images at "
+        f"{profile.get('image_size')}x{profile.get('image_size')} pixels, "
+        f"{profile.get('n_channels')} channels, {profile.get('n_classes')} classes",
+        "",
+        f"Class counts: {counts}",
+        f"Duplicate images: {profile.get('duplicate_images')}; "
+        f"blank images: {profile.get('blank_images')}",
+    ]
+    return "\n".join(lines)
+
+
 class DataStage(ScriptStageBase):
     name = "data"
 
@@ -120,7 +136,11 @@ class DataStage(ScriptStageBase):
                 "cell again."
             )
             return
-        ctx.display(profile_markdown(profile))
+        meta = ctx.project.read_json(META_FILE) or {}
+        if meta.get("modality") == "image":
+            ctx.display(_image_profile_markdown(profile))
+        else:
+            ctx.display(profile_markdown(profile))
         figures = [
             ctx.project.plots_dir / str(name) for name in (profile.get("figures") or [])
         ]

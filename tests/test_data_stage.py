@@ -322,3 +322,23 @@ def test_image_huggingface_source_uses_the_injected_loader(project):
     meta = project.read_json("data_meta.json")
     assert meta["source"] == "huggingface" and meta["hf_id"] == "acme/shapes"
     assert meta["raw_n_rows"] == 18
+
+
+def test_image_debrief_reads_the_image_shaped_profile_not_the_tabular_one(project):
+    """`profile_images`' JSON has no `n_rows`/`columns` keys, so the tabular
+    `profile_markdown` (which the debrief used unconditionally) would raise a KeyError for
+    an image project. Regression test for the bug the image pipeline e2e test caught."""
+    from mlagent.stages.data import DataStage
+
+    ctx, shown = make_image_ctx(project, {
+        "data.n_images": 20, "data.image_size": 32, "data.n_classes": 2,
+        "data.noise": 0.0, "data.inject_quirks": False,
+    })
+    DataStage().prepare(ctx)
+    project.write_json("profile_raw.json", {
+        "n_images": 20, "image_size": 32, "n_channels": 3, "n_classes": 2,
+        "class_counts": {"circle": 10, "square": 10}, "duplicate_images": 0,
+        "blank_images": 0, "figures": [],
+    })
+    DataStage().debrief(ctx)
+    assert any("20 images" in s for s in shown)
