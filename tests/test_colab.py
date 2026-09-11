@@ -142,7 +142,7 @@ def test_every_param_field_has_a_hint_naming_it():
             assert label_match.group(1).lower() == var_name.lower(), (
                 f"hint label {label_match.group(1)!r} does not name field {var_name!r}"
             )
-    assert checked == 23  # every #@param field across the four form cells was checked
+    assert checked == 28  # every #@param field across the four form cells was checked
 
 
 def test_every_form_cell_has_a_purpose_line_after_its_title():
@@ -183,3 +183,99 @@ def test_notebook_has_a_tune_cell_between_evaluate_and_report():
     assert "#@param" not in sources[tune]
     assert sources[tune].startswith("#@title 6. Tune")
     assert "#@title 7. Report" in sources[tune + 1]
+
+
+NOTEBOOK = Path("notebooks/ML_Training_Agent.ipynb")
+
+
+def notebook_sources() -> list[str]:
+    import json
+
+    nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    return ["".join(cell["source"]) for cell in nb["cells"]]
+
+
+def data_cell() -> str:
+    return next(s for s in notebook_sources() if "#@title 2. Data" in s)
+
+
+def test_the_task_field_offers_image_classification():
+    intake = next(s for s in notebook_sources() if "#@title 1. Project" in s)
+    assert "'Image classification'" in intake
+    assert "TASK_LABELS" not in intake  # the labels live in the intake stage, not the cell
+
+
+def test_every_task_label_in_the_notebook_is_one_the_intake_stage_knows():
+    import re
+
+    from mlagent.stages.intake import TASK_LABELS
+
+    intake = next(s for s in notebook_sources() if "#@title 1. Project" in s)
+    line = next(ln for ln in intake.splitlines() if ln.startswith("TASK = "))
+    assert set(re.findall(r"'([^']+)'", line)) <= set(TASK_LABELS) | {
+        "Tabular classification"
+    }
+
+
+def test_the_data_cell_has_the_image_fields_with_hints():
+    source = data_cell()
+    for field in ("N_IMAGES", "IMAGE_SIZE", "DRIVE_FOLDER", "HF_DATASET", "MAX_IMAGES"):
+        assert f"{field} = " in source, field
+        assert f"**{field}**" in source, field
+    assert "IMAGE_SIZE = '64'" in source
+    assert "['32', '64', '128']" in source
+
+
+def test_the_tabular_only_hints_say_so():
+    source = data_cell()
+    for line in source.splitlines():
+        if "**N_FEATURES**" in line or "**TARGET_COLUMN**" in line:
+            assert "ignored for image tasks" in line
+
+
+def test_the_n_classes_hint_covers_images_too():
+    source = data_cell()
+    line = next(ln for ln in source.splitlines() if "**N_CLASSES**" in ln)
+    assert "for images, 2 to 5" in line
+
+
+def test_the_data_cell_passes_every_image_answer_key():
+    source = data_cell()
+    for key in ("data.n_images", "data.image_size", "data.drive_folder", "data.hf_dataset",
+                "data.max_images"):
+        assert f"'{key}'" in source, key
+
+
+def test_the_answer_keys_the_data_cell_sends_are_ones_the_data_stage_reads():
+    import re
+
+    source = (Path("mlagent/stages/data.py")).read_text(encoding="utf-8")
+    used = set(re.findall(r'key="(data\.[a-z_]+)"', source))
+    sent = set(re.findall(r"'(data\.[a-z_]+)'", data_cell()))
+    assert sent <= used, sent - used
+
+
+def test_the_pip_line_installs_torch():
+    pip = next(s for s in notebook_sources() if s.startswith("%pip"))
+    assert "torch" in pip and "torchvision" in pip
+    assert "pillow" in pip
+
+
+def test_the_intro_mentions_image_tasks():
+    intro = notebook_sources()[0]
+    assert "image" in intro.lower()
+
+
+def test_the_gpu_hint_no_longer_defers_images_to_a_later_milestone():
+    intake = next(s for s in notebook_sources() if "#@title 1. Project" in s)
+    assert "later milestone" not in intake
+
+
+def test_the_notebook_is_up_to_date_with_the_builder():
+    import subprocess
+    import sys
+
+    before = NOTEBOOK.read_bytes()
+    subprocess.run([sys.executable, "scripts/build_notebook.py"], check=True,
+                   capture_output=True, text=True)
+    assert NOTEBOOK.read_bytes() == before

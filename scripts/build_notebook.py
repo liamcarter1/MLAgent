@@ -35,8 +35,10 @@ cells = [
         "data source, budget). *You get:* a saved project specification, `spec.json`.\n"
         "2. **Data.** *You do:* give the path, search keywords, or the size of the "
         "synthetic dataset (the source itself is chosen in step 1). *You get:* a raw "
-        "dataset and a profile with two to four figures (histograms, missing values, class "
-        "balance or target spread, correlation).\n"
+        "dataset and a profile with two to four figures. For a table those are "
+        "histograms, missing values, class balance or target spread, and correlation; "
+        "for images they are example thumbnails, class balance, pixel intensity and the "
+        "mean image per class.\n"
         "3. **Clean.** *You do:* approve or skip each proposed fix. *You get:* a cleaned "
         "dataset, a re-runnable `clean.py`, and the train/validation/test split.\n"
         "4. **Model.** *You do:* pick a model family or let the assistant recommend one. "
@@ -56,7 +58,8 @@ cells = [
         "now contains. When it finishes, go back to the assistant cell above it and run that "
         "again for the debrief.\n\n"
         "**Where your files are.** Everything the assistant writes lives on Drive under "
-        "`MyDrive/ml_agent/projects/<your project name>/` — the raw and cleaned data, every "
+        "`MyDrive/ml_agent/projects/<your project name>/` — the raw and cleaned data "
+        "(`data.csv` for a table, `data.npz` plus `manifest.csv` for images), every "
         "script, `config.json`, the figures in `plots/`, and `report.md`. Nothing here is "
         "hidden from you; every generated file is plain, readable Python or JSON.\n\n"
         "**If you get stuck.** *Train again* (near the bottom) reruns training after you edit "
@@ -69,7 +72,7 @@ cells = [
     ),
     code(
         "%pip -q install anthropic markdown pandas numpy scikit-learn matplotlib pyarrow "
-        "openpyxl huggingface_hub datasets"
+        "openpyxl pillow huggingface_hub datasets torch torchvision"
     ),
     code(
         "from google.colab import drive",
@@ -97,11 +100,12 @@ cells = [
         "why, e.g. `predict whether a customer will cancel next month so we can offer a "
         "discount`.",
         "GOAL = 'Predict which customers churn'  #@param {type:'string'}",
-        "#@markdown **TASK** — *Tabular classification* predicts a category (yes/no, which "
-        "type). *Tabular regression* predicts a number (a price, a temperature). If your "
-        "answer is a label, choose classification.",
+        "#@markdown **TASK** — *Tabular classification* predicts a category from a table "
+        "(yes/no, which type). *Tabular regression* predicts a number from a table (a "
+        "price, a temperature). *Image classification* sorts pictures into classes. If "
+        "your answer is a label, choose one of the classification options.",
         "TASK = 'Tabular classification'  #@param ['Tabular classification', "
-        "'Tabular regression']",
+        "'Tabular regression', 'Image classification']",
         "#@markdown **METRIC** — How success is scored. *Accuracy* is the share of correct "
         "predictions (fine when classes are balanced); *F1* is better when one class is rare; "
         "*RMSE* and *MAE* are the average size of the error for numbers, lower is better; "
@@ -126,8 +130,10 @@ cells = [
         "#@markdown **MAX_ROUNDS** — How many times the assistant may suggest an improvement "
         "and retrain after the first run. `3` to `5` is typical.",
         "MAX_ROUNDS = 5  #@param {type:'integer'}",
-        "#@markdown **GPU** — Tables train on the CPU, so keep the no-GPU option for now. A "
-        "GPU only matters for images, which come in a later milestone.",
+        "#@markdown **GPU** — Tables train on the CPU, so keep the no-GPU option for them. "
+        "Images are much faster on a GPU: pick *T4 GPU* for image tasks, and set the "
+        "runtime type to match (Runtime > Change runtime type > T4 GPU). *Pretrained "
+        "ResNet-18* really wants one.",
         "GPU = 'No GPU (CPU only)'  #@param ['No GPU (CPU only)', 'T4 GPU', "
         "'Any available GPU']",
         "",
@@ -146,17 +152,17 @@ cells = [
     ),
     code(
         "#@title 2. Data  { display-mode: 'form' }",
-        "#@markdown Get the data. Only the boxes for the data source you chose above matter; "
-        "the others are ignored. When the assistant stops and names the next cell, run that "
-        "cell.",
+        "#@markdown Get the data. Only the boxes for the task and data source you chose "
+        "above matter; the others are ignored. When the assistant stops and names the next "
+        "cell, run that cell.",
         "#@markdown **N_ROWS** — Synthetic only. How many example rows to invent. `1000` is "
         "enough to learn with and trains in seconds.",
         "N_ROWS = 1000  #@param {type:'integer'}",
-        "#@markdown **N_FEATURES** — Synthetic only. How many input columns (things the model "
-        "can look at). `8` is a good start.",
+        "#@markdown **N_FEATURES** — Synthetic only, ignored for image tasks. How many "
+        "input columns (things the model can look at). `8` is a good start.",
         "N_FEATURES = 8  #@param {type:'integer'}",
-        "#@markdown **N_CLASSES** — Synthetic only, classification. How many categories the "
-        "label can take; `2` for yes/no.",
+        "#@markdown **N_CLASSES** — Synthetic only, classification. How many categories "
+        "the label can take; `2` for yes/no, or for images, 2 to 5.",
         "N_CLASSES = 2  #@param {type:'integer'}",
         "#@markdown **CLASS_BALANCE** — Synthetic only. `0.5` means the classes are equally "
         "common; `0.9` makes one class rare, which is when accuracy misleads and F1 helps.",
@@ -175,10 +181,28 @@ cells = [
         "#@markdown **HF_QUERY** — HuggingFace only. A few keywords describing the dataset "
         "you want, e.g. `credit card fraud` or `iris`. Leave blank to be asked.",
         "HF_QUERY = ''  #@param {type:'string'}",
-        "#@markdown **TARGET_COLUMN** — Drive and HuggingFace only. The column you want to "
-        "predict. Leave blank: after loading the data the assistant shows your columns and "
-        "asks you to pick, with its best guess marked.",
+        "#@markdown **TARGET_COLUMN** — Drive and HuggingFace only, ignored for image "
+        "tasks. The column you want to predict. Leave blank: after loading the data the "
+        "assistant shows your columns and asks you to pick, with its best guess marked.",
         "TARGET_COLUMN = ''  #@param {type:'string'}",
+        "#@markdown **N_IMAGES** — Image tasks, synthetic only. How many shape pictures to "
+        "invent. `300` trains in under a minute on the CPU.",
+        "N_IMAGES = 300  #@param {type:'integer'}",
+        "#@markdown **IMAGE_SIZE** — Image tasks only. How big each picture is made, in "
+        "pixels. `32` is fastest and fine for shapes; `64` is the balanced default; `128` "
+        "sees the most detail but wants the GPU runtime, especially with ResNet-18.",
+        "IMAGE_SIZE = '64'  #@param ['32', '64', '128']",
+        "#@markdown **DRIVE_FOLDER** — Image tasks, Drive only. The folder holding your "
+        "pictures, with one subfolder per class, e.g. `MyDrive/pets` containing "
+        "`cats/` and `dogs/`. Files that are not readable images are reported, never fatal.",
+        "DRIVE_FOLDER = ''  #@param {type:'string'}",
+        "#@markdown **HF_DATASET** — Image tasks, HuggingFace only. The dataset id to "
+        "download, e.g. `cifar10` or `beans`.",
+        "HF_DATASET = ''  #@param {type:'string'}",
+        "#@markdown **MAX_IMAGES** — Image tasks, Drive and HuggingFace only. Cap on how "
+        "many pictures to use; `0` means all of them. A cap keeps your first run quick and "
+        "still keeps every class.",
+        "MAX_IMAGES = 0  #@param {type:'integer'}",
         "",
         "orch.run(until='data', answers={",
         "    'data.n_rows': N_ROWS,",
@@ -190,6 +214,11 @@ cells = [
         "    'data.drive_path': DRIVE_PATH,",
         "    'data.hf_query': HF_QUERY,",
         "    'data.target_column': TARGET_COLUMN,",
+        "    'data.n_images': N_IMAGES,",
+        "    'data.image_size': IMAGE_SIZE,",
+        "    'data.drive_folder': DRIVE_FOLDER,",
+        "    'data.hf_dataset': HF_DATASET,",
+        "    'data.max_images': MAX_IMAGES,",
         "})",
     ),
     script_cell("data", 0),
@@ -220,15 +249,16 @@ cells = [
     script_cell("clean", 0),
     code(
         "#@title 4. Model  { display-mode: 'form' }",
-        "#@markdown Choose a model. The assistant explains the three options and recommends "
-        "one for your data. If unsure, keep *Ask me after the explanation*.",
-        "#@markdown **MODEL** — *Linear / logistic regression* is simple, fast and easy to "
-        "read. *Random forest* is robust and copes with messy data. *Gradient boosting* is "
-        "usually the most accurate on tables. *Ask me after the explanation* uses the "
-        "assistant's recommendation.",
+        "#@markdown Choose a model. The assistant explains the options for your kind of "
+        "data and recommends one. If unsure, keep *Ask me after the explanation* — that "
+        "works for tables and images alike.",
+        "#@markdown **MODEL** — For tables: *Linear / logistic regression* is simple and "
+        "easy to read, *Random forest* is robust, *Gradient boosting* is usually the most "
+        "accurate. For images: *Tiny CNN* is a fast sanity check, *Small CNN* is the "
+        "default, *Pretrained ResNet-18* is the most accurate but wants the GPU runtime.",
         "MODEL = 'Ask me after the explanation'  #@param "
         "['Ask me after the explanation', 'Linear / logistic regression', 'Random forest', "
-        "'Gradient boosting']",
+        "'Gradient boosting', 'Tiny CNN', 'Small CNN', 'Pretrained ResNet-18']",
         "",
         "orch.run(until='train', answers={'codegen.model_type': MODEL})",
     ),
