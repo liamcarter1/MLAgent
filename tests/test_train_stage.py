@@ -296,7 +296,7 @@ def test_the_preamble_names_the_image_checkpoint_and_the_tabular_one(tmp_path):
     ctx, shown, _figures = make_ctx(image_project)
     TrainStage().prepare(ctx)
     joined = " ".join(shown)
-    assert "checkpoints/model.pt" in joined
+    assert "checkpoints/best.pt" in joined
     assert "[[GPU]] if this runtime" in joined
 
     tabular_project = prepared(

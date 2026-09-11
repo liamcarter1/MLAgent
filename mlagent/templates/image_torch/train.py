@@ -38,17 +38,6 @@ from evaluate import (
 from model import build_model
 from torch import nn
 
-# Running "python train.py" puts this script's own directory (the project folder, which
-# also holds the data stage's profile.py) first on sys.path. torch's optimiser internals
-# lazily `import cProfile`, which does `import profile` for its stdlib docstrings; left
-# first on sys.path, the project's profile.py would shadow the stdlib module and crash
-# that import. Deprioritise it before any optimiser is built (imports above already
-# resolved `data`/`model`/`evaluate` while it was still first).
-_here = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else ""
-sys.path = [p for p in sys.path if p not in ("", _here)] + [
-    p for p in sys.path if p in ("", _here)
-]
-
 # --- settings ---
 SCRIPT_NAME = "train.py"
 CONFIG_FILE = "config.json"
@@ -67,6 +56,22 @@ CAPTIONS = {
         "[[overfitting]]; both flat is a [[plateau]]."
     ),
 }
+
+
+# --- environment ---
+def prefer_stdlib_modules() -> None:
+    """Make sure Python's own `profile`/`cProfile` modules win over this project's
+    `profile.py` (written by the data stage, in the same folder as this script).
+
+    Running "python train.py" puts this script's own directory first on sys.path.
+    torch's optimiser internals lazily `import cProfile`, which does `import profile` for
+    its stdlib docstrings; left first on sys.path, the project's profile.py would shadow
+    the stdlib module and crash that import. Called before the optimiser is built.
+    """
+    here = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else ""
+    sys.path[:] = [p for p in sys.path if p not in ("", here)] + [
+        p for p in sys.path if p in ("", here)
+    ]
 
 
 # --- small helpers ---
@@ -312,6 +317,7 @@ def cli_argv() -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    prefer_stdlib_modules()
     parser = argparse.ArgumentParser(description="Train the network and record every epoch.")
     parser.add_argument("--project", default=".", help="project folder (default: cwd)")
     args = parser.parse_args(argv)

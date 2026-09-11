@@ -10,7 +10,7 @@ import pandas as pd
 from mlagent.datasources.drive import list_candidates
 from mlagent.datasources.hf import search_datasets
 from mlagent.imageset import DEFAULT_IMAGE_SIZE, IMAGE_SIZES
-from mlagent.modality import modality_for
+from mlagent.modality import IMAGE, TABULAR, modality_for
 from mlagent.profile import profile_markdown
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.synth.images import MAX_CLASSES as MAX_IMAGE_CLASSES
@@ -83,9 +83,9 @@ class DataStage(ScriptStageBase):
         meta = ctx.project.read_json(META_FILE)
         if not meta or not meta.get("target"):
             return False
-        data_file = IMAGE_RAW_FILE if meta.get("modality") == "image" else RAW_FILE
+        modality = IMAGE if meta.get("modality") == "image" else TABULAR
         return (
-            (ctx.project.data_raw / data_file).exists()
+            (ctx.project.data_raw / modality.data_file).exists()
             and ctx.project.exists(PROFILE_RAW_FILE)
         )
 

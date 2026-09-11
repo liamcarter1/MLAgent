@@ -54,6 +54,15 @@ def load_folder(
         raise NotADirectoryError(f"no such folder: {root}")
     candidates, skipped = _candidate_files(root)
 
+    # Cap on the class folder names alone, before opening a single file, so a `max_images`
+    # cap skips reading (and decoding) the files that would be dropped anyway.
+    class_names_all = [name for name, _p in candidates]
+    distinct = sorted(set(class_names_all))
+    class_index = {name: i for i, name in enumerate(distinct)}
+    labels_all = np.array([class_index[name] for name in class_names_all], dtype=np.int64)
+    keep = stratified_indices(labels_all, max_images)
+    candidates = [candidates[i] for i in keep]
+
     arrays: list[np.ndarray] = []
     class_of: list[str] = []
     sources: list[str] = []
@@ -83,8 +92,5 @@ def load_folder(
         class_names=class_names,
         manifest=make_manifest(labels, class_names, sources, sizes),
     )
-    keep = stratified_indices(imageset.labels, max_images)
-    if len(keep) != imageset.n_images:
-        imageset = imageset.take(keep)
     imageset.validate()
     return imageset, skipped

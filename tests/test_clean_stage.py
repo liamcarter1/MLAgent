@@ -298,6 +298,36 @@ def test_image_clean_prepare_writes_the_audit_and_an_image_clean_py(project):
     assert meta["dropped_columns"] == [] and meta["split_seed"] == 42
 
 
+def test_image_clean_review_shows_the_image_describer_not_the_raw_index_list(project):
+    from mlagent.imageset import write_pair
+    from mlagent.stages.clean import CleanStage
+    from mlagent.synth.images import SynthImageConfig, generate
+
+    imageset = generate(SynthImageConfig(n_images=40, image_size=32, n_classes=2, seed=3,
+                                         duplicate_fraction=0.2, blank_fraction=0.1))
+    write_pair(imageset, project.data_raw)
+    project.write_json("data_meta.json", {
+        "target": "label", "task_type": "image_classification", "modality": "image",
+        "source": "synthetic", "raw_path": "data/raw/data.npz", "raw_n_rows": 40,
+        "raw_n_cols": 32 * 32 * 3, "image_size": 32, "n_channels": 3,
+        "class_labels": list(imageset.class_names), "n_classes": 2, "skipped_files": [],
+    })
+    project.write_json("spec.json", {
+        "goal": "shapes", "task_type": "image_classification", "metric": "accuracy",
+        "target_value": 0.9, "data_source": "synthetic", "minutes_per_run": 5,
+        "max_rounds": 3, "gpu": "none", "notes": "",
+    })
+    ctx, shown = image_ctx(project, answers=["y"] * 10,
+                           form={"clean.train_fraction": 0.7, "clean.val_fraction": 0.15})
+    CleanStage().prepare(ctx)
+
+    audit = project.read_json("audit.json")
+    assert audit["steps"], "the synthetic quirks must produce at least one approved fix"
+    joined = "\n".join(shown)
+    assert "drop " in joined and "image(s) (" in joined
+    assert "'indices'" not in joined and '"indices"' not in joined
+
+
 def test_image_clean_report_card_payload_uses_image_shaped_counts(project):
     from mlagent.imageset import write_pair
     from mlagent.stages.clean import CleanStage
@@ -350,6 +380,27 @@ def test_image_clean_debrief_completes_the_meta(clean_image_project):
     assert any("58" in text or "Cleaning summary" in text for text in shown)
 
 
+def test_is_complete_image_requires_clean_path_and_class_labels(clean_image_project):
+    from mlagent.stages.clean import CleanStage
+
+    project = clean_image_project
+    project.write_json("audit.json", {"issues": [], "decisions": [], "steps": []})
+    stage = CleanStage()
+    ctx, _shown = image_ctx(project)
+    assert stage.is_complete(ctx)
+
+    meta = project.read_json("data_meta.json")
+    del meta["clean_path"]
+    project.write_json("data_meta.json", meta)
+    assert not stage.is_complete(ctx)
+
+    meta = project.read_json("data_meta.json")
+    meta["clean_path"] = "data/clean/data.npz"
+    del meta["class_labels"]
+    project.write_json("data_meta.json", meta)
+    assert not stage.is_complete(ctx)
+
+
 def test_image_clean_debrief_reports_an_emptied_class_as_an_error(clean_image_project):
     from mlagent.imageset import read_pair, write_pair
     from mlagent.stages.clean import CleanStage
@@ -363,3 +414,96 @@ def test_image_clean_debrief_reports_an_emptied_class_as_an_error(clean_image_pr
     joined = "\n".join(shown)
     assert "no images left" in joined
     assert imageset.class_names[0] in joined
+    assert "orch.reset('clean')" in joined
+    assert not CleanStage().is_complete(ctx)
+
+
+class _AutoApproveQuestioner:
+    """Approves every drop-fix confirmation; answers train/val split fractions from a
+    fixed map. Enough of the `Questioner` protocol for the image clean stage."""
+
+    def __init__(self, numbers: dict):
+        self._numbers = dict(numbers)
+        self.asked: list[str] = []
+
+    def choice(self, question, options, allow_other=True, key=None, default=None):
+        raise AssertionError(f"unexpected choice(): {question}")
+
+    def text(self, prompt, default=None, key=None):
+        raise AssertionError(f"unexpected text(): {prompt}")
+
+    def confirm(self, question, default=True, key=None):
+        self.asked.append(question)
+        return True
+
+    def number(self, prompt, default=None, minimum=None, maximum=None, key=None):
+        self.asked.append(prompt)
+        return self._numbers.get(key, default)
+
+
+def test_orchestrator_does_not_advance_past_clean_when_a_class_is_emptied(project):
+    """An audit fix that empties a whole class must not let the orchestrator mark clean
+    complete and move on to codegen: the user has no way back to fix STEPS otherwise."""
+    import numpy as np
+
+    from mlagent.imageset import ImageSet, make_manifest, write_pair
+    from mlagent.orchestrator import Orchestrator
+    from mlagent.stages.clean import CleanStage
+    from mlagent.stages.codegen import CodegenStage
+
+    image_size = 16
+    n_per_class = 12
+    rng = np.random.default_rng(5)
+    blank = np.full((image_size, image_size, 3), 180, dtype=np.uint8)
+    images, labels = [], []
+    for _ in range(n_per_class):
+        images.append(blank.copy())
+        labels.append(0)
+    for cls in (1, 2):
+        for _ in range(n_per_class):
+            images.append(rng.integers(0, 255, size=(image_size, image_size, 3), dtype=np.uint8))
+            labels.append(cls)
+    images_arr = np.stack(images)
+    labels_arr = np.array(labels, dtype=np.int64)
+    class_names = ["circle", "square", "triangle"]
+    sources = [f"synthetic#{i}" for i in range(len(labels_arr))]
+    sizes = [(image_size, image_size)] * len(labels_arr)
+    manifest = make_manifest(labels_arr, class_names, sources, sizes)
+    imageset = ImageSet(images=images_arr, labels=labels_arr, class_names=class_names,
+                        manifest=manifest)
+
+    project.ensure_dirs()
+    write_pair(imageset, project.data_raw)
+    project.write_json("data_meta.json", {
+        "target": "label", "task_type": "image_classification", "modality": "image",
+        "source": "synthetic", "raw_path": "data/raw/data.npz",
+        "raw_n_rows": imageset.n_images, "raw_n_cols": image_size * image_size * 3,
+        "image_size": image_size, "n_channels": 3, "n_classes": 3,
+        "class_labels": class_names, "skipped_files": [],
+    })
+    project.write_json("spec.json", {
+        "goal": "shapes", "task_type": "image_classification", "metric": "accuracy",
+        "target_value": 0.9, "data_source": "synthetic", "minutes_per_run": 5,
+        "max_rounds": 3, "gpu": "none", "notes": "",
+    })
+
+    questioner = _AutoApproveQuestioner(
+        {"clean.train_fraction": 0.7, "clean.val_fraction": 0.15}
+    )
+    ctx, shown, _figures = make_ctx(project, [], llm=FakeLLM([]))
+    ctx.questioner = questioner
+    clean_stage = CleanStage()
+    orch = Orchestrator(ctx, [clean_stage, CodegenStage()])
+
+    ran = orch.run()
+    assert ran == []
+    handoff = orch.waiting()
+    assert handoff is not None and handoff.commands == [["clean.py"]]
+    run_clean_script(project)
+
+    ran = orch.run()
+    assert ran == [], "codegen must not run: the empty-class error must stop the pipeline"
+    joined = "\n".join(shown)
+    assert "no images left" in joined
+    assert not clean_stage.is_complete(ctx)
+    assert orch.completed() == []

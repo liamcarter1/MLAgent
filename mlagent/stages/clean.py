@@ -8,10 +8,8 @@ import pandas as pd
 from pandas.api import types as ptypes
 
 from mlagent.audit import Issue
-from mlagent.cleaning import describe_step
-from mlagent.cleaning_images import describe_step as describe_image_step
 from mlagent.llm import LLMError, ask_text
-from mlagent.modality import modality_for
+from mlagent.modality import IMAGE, TABULAR, modality_for
 from mlagent.profile import profile_dataframe
 from mlagent.prompts_io import audience, load_prompt
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
@@ -36,12 +34,21 @@ class CleanStage(ScriptStageBase):
     def is_complete(self, ctx: StageContext) -> bool:
         meta = ctx.project.read_json(META_FILE) or {}
         image = meta.get("modality") == "image"
-        clean_file = CLEAN_IMAGE_FILE if image else CLEAN_FILE
+        modality = IMAGE if image else TABULAR
+        # An image dataset needs `clean_path`/`class_labels` too, not just the splits and
+        # the file on disk: `_debrief_images` deliberately skips writing them when cleaning
+        # emptied a class, so this must stay False until the user fixes STEPS and the
+        # debrief succeeds -- otherwise the orchestrator marks clean complete and codegen
+        # fails downstream with no way for the user to get back to the clean stage.
+        meta_ready = (
+            bool(meta.get("clean_path")) and bool(meta.get("class_labels"))
+            if image else bool(meta.get("feature_columns"))
+        )
         return (
-            (ctx.project.data_clean / clean_file).exists()
+            (ctx.project.data_clean / modality.data_file).exists()
             and ctx.project.exists(AUDIT_FILE)
             and bool(meta.get("splits"))
-            and (image or bool(meta.get("feature_columns")))
+            and meta_ready
         )
 
     def prepare(self, ctx: StageContext) -> Handoff:
@@ -58,7 +65,7 @@ class CleanStage(ScriptStageBase):
 
         ctx.teaching().preamble("clean", {"target": target, "n_rows": int(len(df))})
         issues = modality.audit(df, target)
-        decisions = self._review_issues(ctx, issues, before)
+        decisions = self._review_issues(ctx, modality, issues, before)
         steps = self._collect_steps(decisions)
 
         drops = self._ask_drops(ctx, df, target)
@@ -78,7 +85,7 @@ class CleanStage(ScriptStageBase):
         )
         ctx.project.write_json(META_FILE, meta)
 
-        listed = "\n".join(f"- {describe_step(s)}" for s in steps) or "- (no changes)"
+        listed = "\n".join(f"- {modality.describe_step(s)}" for s in steps) or "- (no changes)"
         ctx.display(
             f"I wrote `clean.py` with {len(steps)} step(s):\n\n{listed}\n\n"
             "Run it in the next cell. It reads `data/raw/data.csv`, writes "
@@ -98,7 +105,7 @@ class CleanStage(ScriptStageBase):
         )
         skipped = [tuple(pair) for pair in (meta.get("skipped_files") or [])]
         issues = modality.audit(imageset, meta, skipped)
-        decisions = self._review_issues(ctx, issues, {
+        decisions = self._review_issues(ctx, modality, issues, {
             "n_rows": imageset.n_images,
             # Pixel values per image (matches data_meta's raw_n_cols), not the class
             # count -- _explain indexes "n_cols" directly and a tabular-shaped label
@@ -121,7 +128,7 @@ class CleanStage(ScriptStageBase):
         meta.update({"splits": splits, "dropped_columns": [], "split_seed": SPLIT_SEED})
         ctx.project.write_json(META_FILE, meta)
 
-        listed = "\n".join(f"- {describe_image_step(s)}" for s in steps) or "- (no changes)"
+        listed = "\n".join(f"- {modality.describe_step(s)}" for s in steps) or "- (no changes)"
         ctx.display(
             f"I wrote `clean.py` with {len(steps)} step(s):\n\n{listed}\n\n"
             "Run it in the next cell. It reads `data/raw/data.npz`, writes "
@@ -171,7 +178,7 @@ class CleanStage(ScriptStageBase):
         figures = [
             ctx.project.plots_dir / str(name) for name in (profile.get("figures") or [])
         ]
-        ctx.display(self._summary(profile, meta))
+        ctx.display(self._summary(TABULAR, profile, meta))
         payload = {"before": profile.get("before"), "after": profile.get("after"),
                    "steps": profile.get("steps"), "splits": meta.get("splits")}
         note = ctx.teaching().debrief("clean_debrief", payload, figures, fallback="")
@@ -193,8 +200,9 @@ class CleanStage(ScriptStageBase):
         if empty:
             ctx.display(
                 f"Cleaning removed every image of {', '.join(empty)}, so those classes have "
-                "no images left. Edit `STEPS` in `clean.py` to keep some of them and run "
-                "the cell again, or redo the clean stage and decline that fix."
+                "no images left. Edit `STEPS` in `clean.py` to keep some of them, run the "
+                "cell again, then run `orch.reset('clean')` so the pipeline re-reads them -- "
+                "or redo the clean stage and decline that fix."
             )
             return
         meta.update({
@@ -257,7 +265,9 @@ class CleanStage(ScriptStageBase):
             steps.append(fix)
         return steps
 
-    def _review_issues(self, ctx: StageContext, issues: list[Issue], profile: dict) -> list[dict]:
+    def _review_issues(
+        self, ctx: StageContext, modality, issues: list[Issue], profile: dict
+    ) -> list[dict]:
         if not issues:
             ctx.display("The audit found no problems. Nice and clean.")
             return []
@@ -267,7 +277,7 @@ class CleanStage(ScriptStageBase):
             where = f" in `{issue.column}`" if issue.column else ""
             line = f"**[{issue.severity}] {issue.kind}**{where}: {issue.message}"
             if issue.fix:
-                ctx.display(f"{line}\n\nProposed fix: {describe_step(issue.fix)}")
+                ctx.display(f"{line}\n\nProposed fix: {modality.describe_step(issue.fix)}")
                 approved = ctx.questioner.confirm(
                     "Apply this fix?", default=issue.severity != "low"
                 )
@@ -338,7 +348,7 @@ class CleanStage(ScriptStageBase):
             )
         return {"train": round(train, 4), "val": round(val, 4), "test": test}
 
-    def _summary(self, profile: dict, meta: dict) -> str:
+    def _summary(self, modality, profile: dict, meta: dict) -> str:
         before = profile.get("before") or {}
         after = profile.get("after") or {}
         steps = profile.get("steps") or []
@@ -349,7 +359,7 @@ class CleanStage(ScriptStageBase):
             f"- Columns: {before.get('n_cols', '?')} -> {after.get('n_cols', '?')}",
             f"- Steps applied: {len(steps)}",
         ]
-        lines.extend(f"  - {describe_step(s)}" for s in steps)
+        lines.extend(f"  - {modality.describe_step(s)}" for s in steps)
         splits = meta.get("splits") or {}
         lines += [
             "",

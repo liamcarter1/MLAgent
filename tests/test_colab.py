@@ -226,6 +226,11 @@ def test_the_data_cell_has_the_image_fields_with_hints():
     assert "['32', '64', '128']" in source
 
 
+def test_the_max_images_default_is_2000():
+    source = data_cell()
+    assert "MAX_IMAGES = 2000" in source
+
+
 def test_the_tabular_only_hints_say_so():
     source = data_cell()
     for line in source.splitlines():

@@ -61,6 +61,21 @@ def test_max_images_caps_with_a_stratified_sample(tmp_path):
     assert min(imageset.class_counts().values()) >= 1
 
 
+def test_max_images_only_opens_the_kept_files(tmp_path, monkeypatch):
+    root = build_folder(tmp_path)  # 3 cats, 2 dogs = 5 candidate files
+    opened: list = []
+    real_open = Image.open
+
+    def counting_open(path, *a, **k):
+        opened.append(path)
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr(Image, "open", counting_open)
+    imageset, _skipped = load_folder(root, image_size=32, max_images=3)
+    assert imageset.n_images == 3
+    assert len(opened) == 3
+
+
 def test_an_empty_folder_raises_a_clear_error(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(ValueError, match="no readable images"):
@@ -77,7 +92,9 @@ class FakeImageFeature:
 
 
 class FakeDataset:
-    """Just enough of a `datasets.Dataset` for the loader: features, len, indexing."""
+    """Just enough of a `datasets.Dataset` for the loader: features, len, indexing by row
+    (an int) or by column (a string, mirroring `datasets.Dataset.__getitem__`), so the
+    label column can be read without touching any row's image value."""
 
     def __init__(self, rows, features):
         self.rows = list(rows)
@@ -86,8 +103,10 @@ class FakeDataset:
     def __len__(self):
         return len(self.rows)
 
-    def __getitem__(self, i):
-        return self.rows[i]
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return [row[key] for row in self.rows]
+        return self.rows[key]
 
 
 def fake_hf_dataset(n=6):
@@ -122,6 +141,39 @@ def test_load_image_dataset_caps_with_a_stratified_sample():
         "acme/pets", image_size=16, max_images=4, loader=lambda *a, **k: fake_hf_dataset(10)
     )
     assert imageset.n_images == 4
+    assert set(np.unique(imageset.labels).tolist()) == {0, 1}
+
+
+class RecordingRow(dict):
+    """A row whose `"image"` value is only decoded (i.e. read) when actually indexed;
+    every such read is recorded in `accessed`, shared across every row in the dataset."""
+
+    def __init__(self, image, label, accessed):
+        super().__init__(label=label)
+        self._image = image
+        self._accessed = accessed
+
+    def __getitem__(self, key):
+        if key == "image":
+            self._accessed.append(self)
+            return self._image
+        return super().__getitem__(key)
+
+
+def test_load_image_dataset_only_decodes_images_kept_after_the_cap():
+    accessed: list = []
+    rows = [
+        RecordingRow(Image.new("RGB", (10, 10), (i % 256, 50, 50)), i % 2, accessed)
+        for i in range(20)
+    ]
+    ds = FakeDataset(rows, {"image": FakeImageFeature(), "label": FakeClassLabel(["a", "b"])})
+
+    imageset = load_image_dataset(
+        "x/y", image_size=8, max_images=6, loader=lambda *a, **k: ds
+    )
+
+    assert imageset.n_images == 6
+    assert len(accessed) == 6
     assert set(np.unique(imageset.labels).tolist()) == {0, 1}
 
 

@@ -49,6 +49,7 @@ class Modality:
     render_clean_py: Callable[..., str]
     write_raw: Callable[..., object]
     read: Callable[[Path], object]
+    describe_step: Callable[[dict], str]   # one cleaning fix, as a sentence for the user
 
 
 def _write_table(df: pd.DataFrame, directory: Path) -> Path:
@@ -80,6 +81,7 @@ TABULAR = Modality(
     render_clean_py=cleaning.render_clean_py,
     write_raw=_write_table,
     read=_read_table,
+    describe_step=cleaning.describe_step,
 )
 
 IMAGE = Modality(
@@ -99,6 +101,7 @@ IMAGE = Modality(
     render_clean_py=cleaning_images.render_clean_py,
     write_raw=lambda imageset, directory: write_pair(imageset, directory)[0],
     read=read_pair,
+    describe_step=cleaning_images.describe_step,
 )
 
 MODALITIES: tuple[Modality, ...] = (TABULAR, IMAGE)

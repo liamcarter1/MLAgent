@@ -82,6 +82,7 @@ def test_render_clean_py_substitutes_the_steps_and_keeps_the_conventions():
     assert STEPS_MARKER not in source
     assert '"drop_indices"' in source
     assert "import mlagent" not in source and "from mlagent" not in source
+    assert "import PIL" not in source and "from PIL" not in source
     assert "# --- settings ---" in source
     assert "def cli_argv()" in source
     assert "sys.exit(0)" not in source

@@ -193,6 +193,7 @@ def test_the_scripts_follow_the_generated_script_conventions():
     for name in ("train.py", "evaluate.py"):
         source = (TEMPLATE / name).read_text(encoding="utf-8")
         assert "import mlagent" not in source and "from mlagent" not in source
+        assert "import PIL" not in source and "from PIL" not in source
         assert "# --- settings ---" in source
         assert "def cli_argv()" in source
         assert "sys.exit(0)" not in source.split("if __name__")[0]

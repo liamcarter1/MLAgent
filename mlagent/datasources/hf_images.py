@@ -139,21 +139,26 @@ def load_image_dataset(
     image_key = _detect_image_column(features, image_column)
     label_key = _detect_label_column(features, label_column)
 
-    rows = [ds[i] for i in range(len(ds))]
-    raw_labels = [row[label_key] for row in rows]
+    # Column access reads only the label column, never touching (and so never decoding)
+    # any row's image value; `stratified_indices` below then picks which rows to keep
+    # *before* any image is opened, so a `max_images` cap skips decoding the rest.
+    raw_labels = list(ds[label_key])
     class_names, index = _class_names_and_index(features, label_key, raw_labels)
+    canonical = [
+        index[int(v) if _is_int_label(v) else str(v)] for v in raw_labels
+    ]
+    keep = stratified_indices(np.array(canonical, dtype=np.int64), max_images)
 
     arrays: list[np.ndarray] = []
     labels: list[int] = []
     sources: list[str] = []
     sizes: list[tuple[int, int]] = []
-    for i, row in enumerate(rows):
+    for i in keep:
+        row = ds[i]
         image = _to_pil(row[image_key], i, image_key)
         width, height = image.size
         arrays.append(prepare_image(image, image_size))
-        value = raw_labels[i]
-        key = int(value) if _is_int_label(value) else str(value)
-        labels.append(index[key])
+        labels.append(canonical[i])
         sources.append(f"hf:{dataset_id}/{split}#{i}")
         sizes.append((int(width), int(height)))
 
@@ -167,8 +172,5 @@ def load_image_dataset(
         class_names=class_names,
         manifest=make_manifest(label_array, class_names, sources, sizes),
     )
-    keep = stratified_indices(imageset.labels, max_images)
-    if len(keep) != imageset.n_images:
-        imageset = imageset.take(keep)
     imageset.validate()
     return imageset

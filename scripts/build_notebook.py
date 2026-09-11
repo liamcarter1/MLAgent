@@ -190,7 +190,9 @@ cells = [
         "N_IMAGES = 300  #@param {type:'integer'}",
         "#@markdown **IMAGE_SIZE** — Image tasks only. How big each picture is made, in "
         "pixels. `32` is fastest and fine for shapes; `64` is the balanced default; `128` "
-        "sees the most detail but wants the GPU runtime, especially with ResNet-18.",
+        "sees the most detail but wants the GPU runtime, especially with ResNet-18. As a "
+        "practical ceiling, `128` with a few thousand images wants the GPU runtime and "
+        "several GB of RAM.",
         "IMAGE_SIZE = '64'  #@param ['32', '64', '128']",
         "#@markdown **DRIVE_FOLDER** — Image tasks, Drive only. The folder holding your "
         "pictures, with one subfolder per class, e.g. `MyDrive/pets` containing "

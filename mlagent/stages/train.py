@@ -51,7 +51,7 @@ class TrainStage(ScriptStageBase):
             checkpoint_sentence = (
                 f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
                 "metric curves as it goes, and saves the best model to "
-                "`checkpoints/model.pt`."
+                "`checkpoints/best.pt`."
             )
         else:
             device_sentence = (

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -239,6 +240,7 @@ def test_the_scripts_follow_the_generated_script_conventions():
     for name in CODE_FILES:
         source = (TEMPLATE / name).read_text(encoding="utf-8")
         assert "import mlagent" not in source and "from mlagent" not in source
+        assert "import PIL" not in source and "from PIL" not in source
         assert "# --- settings ---" in source
         assert "sys.exit(0)" not in source
         assert source.count("\n# --- ") >= 3
@@ -250,7 +252,7 @@ def test_data_py_runs_as_a_script_without_arguments(clean_image_project):
         [sys.executable, "data.py"], cwd=root, capture_output=True, text=True,
         encoding="utf-8", timeout=180,
         # "-1", not "": an empty value unsets the variable on Windows instead of hiding the GPU.
-        env={**dict(__import__("os").environ), "CUDA_VISIBLE_DEVICES": "-1"},
+        env={**dict(os.environ), "CUDA_VISIBLE_DEVICES": "-1"},
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "train" in proc.stdout

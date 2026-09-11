@@ -64,7 +64,8 @@ def stratified_split(labels: np.ndarray, splits: dict, seed: int) -> dict[str, n
         rng.shuffle(idx)
         n = len(idx)
         if n < 3:
-            print(f"warning: class {label} has only {n} image(s); keeping all of it in train")
+            print(f"warning: class {label} has only {n} image(s); keeping all of it in train",
+                  flush=True)
             chosen["train"].extend(idx.tolist())
             continue
         n_train = max(1, int(round(train_frac * n)))
