@@ -53,3 +53,12 @@ def test_tuning_primer_is_level_fenced():
     assert "learning rate" in beginner.lower() and "overfitting" in beginner.lower()
     assert len(beginner) > len(expert)
     assert "<!--" not in beginner and "<!--" not in expert
+
+
+def test_the_image_model_choices_material_trims_per_level():
+    from mlagent.teaching import material
+
+    for level in ("beginner", "intermediate", "expert"):
+        text = material("model_choices_images", level)
+        assert text.strip()
+        assert "<!--" not in text

@@ -105,3 +105,48 @@ def test_build_run_entry_carries_applied_diff():
     assert entry["applied_diff"] == {"epochs": {"from": 5, "to": 10}}
     assert entry["checkpoint"] == "checkpoints/run1.joblib"
     assert runs.build_run_entry({"status": "failed", "epochs": []})["applied_diff"] is None
+
+
+def test_archive_run_preserves_a_pt_checkpoint_suffix(project):
+    from mlagent.runs import archive_run
+
+    project.ensure_dirs()
+    (project.checkpoints_dir / "best.pt").write_bytes(b"weights")
+    (project.plots_dir / "training_curves.png").write_bytes(b"png")
+    (project.plots_dir / "val_misclassified.png").write_bytes(b"png")
+
+    figures = archive_run(project, 3, checkpoint="checkpoints/best.pt")
+    assert (project.checkpoints_dir / "run3.pt").exists()
+    assert not (project.checkpoints_dir / "run3.joblib").exists()
+    assert {p.name for p in figures} == {"run3_training.png", "run3_val_misclassified.png"}
+
+
+def test_archive_run_falls_back_to_the_legacy_joblib_name(project):
+    from mlagent.runs import archive_run
+
+    project.ensure_dirs()
+    (project.checkpoints_dir / "best.joblib").write_bytes(b"model")
+    archive_run(project, 1)
+    assert (project.checkpoints_dir / "run1.joblib").exists()
+
+
+def test_log_finished_run_records_the_pt_checkpoint(project):
+    from mlagent.runs import log_finished_run
+
+    project.ensure_dirs()
+    started = "2026-09-10T12:00:00.000000+00:00"
+    project.write_json("metrics.json", {
+        "status": "done", "started_at": started, "model_type": "small_cnn",
+        "task_type": "image_classification", "config": {"model_type": "small_cnn"},
+        "epochs": [{"epoch": 1, "train_loss": 0.5, "val_loss": 0.6, "train_metric": 0.7,
+                    "val_metric": 0.65}],
+        "best_epoch": 1, "best_val_metric": 0.65, "seconds": 1.0, "error": None,
+        "checkpoint": "checkpoints/best.pt",
+    })
+    project.write_json("eval_val.json", {"started_at": started, "value": 0.65})
+    (project.checkpoints_dir / "best.pt").write_bytes(b"weights")
+
+    logged = log_finished_run(project)
+    assert logged is not None and logged.new is True
+    assert logged.entry["checkpoint"] == "checkpoints/run1.pt"
+    assert (project.checkpoints_dir / "run1.pt").exists()

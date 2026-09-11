@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mlagent import config as cfg
+from mlagent.modality import modality_for
 from mlagent.runlog import read_runs
 from mlagent.runs import EVAL_VAL_FILE, log_finished_run, run_problem
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
@@ -40,12 +41,31 @@ class TrainStage(ScriptStageBase):
         if not isinstance(config, dict) or not all((project.root / f).exists() for f in CODE_FILES):
             raise RuntimeError("training project not found; run the codegen stage first")
         spec = ctx.spec()
+        modality = modality_for(spec.task_type)
+        if modality.name == "image":
+            device_sentence = (
+                "Training picks its [[device]] at run time -- the [[GPU]] if this runtime "
+                "has one, otherwise the [[CPU]] -- so there is no [[compute unit]] cost gate "
+                "for this run."
+            )
+            checkpoint_sentence = (
+                f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
+                "metric curves as it goes, and saves the best model to "
+                "`checkpoints/model.pt`."
+            )
+        else:
+            device_sentence = (
+                "Training runs on the [[CPU]] for tabular data, so there is no "
+                "[[compute unit]] cost gate for this run."
+            )
+            checkpoint_sentence = (
+                f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
+                "metric curves as it goes, and saves the best model to "
+                "`checkpoints/best.joblib`."
+            )
         ctx.display(
-            "Training runs on the [[CPU]] for tabular data, so there is no [[compute unit]] "
-            f"cost gate for this run. `train.py` runs {config.get('epochs')} [[epoch]]s, "
-            "redrawing the loss and metric curves as it goes, and saves the best model to "
-            "`checkpoints/best.joblib`. `evaluate.py` then scores that model on the "
-            f"[[validation set]] and draws the {spec.metric} figures. Run both cells."
+            f"{device_sentence} {checkpoint_sentence} `evaluate.py` then scores that model "
+            f"on the [[validation set]] and draws the {spec.metric} figures. Run both cells."
         )
         ctx.teaching().preamble("train", {"config": config, "metric": spec.metric})
         # metrics.json/eval_val.json are derived outputs the cells regenerate; drop any

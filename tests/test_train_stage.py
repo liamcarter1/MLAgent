@@ -28,6 +28,15 @@ def prepared(project):
     return project
 
 
+def prepared_image(project):
+    """Run codegen with defaults so an image training project exists."""
+    ctx = StageContext(project=project, llm=FakeLLM([]),
+                       questioner=ScriptedQuestioner(["Small CNN", "y"]),
+                       explainer=None, display=lambda s: None)
+    CodegenStage().prepare(ctx)
+    return project
+
+
 def make_ctx(project, llm=None, answers=()):
     shown: list[str] = []
     figures: list[tuple[Path, str]] = []
@@ -270,3 +279,31 @@ def test_llm_failure_still_completes(clean_project):
     assert any("best" in s.lower() for s in shown)
     assert json.loads(project.metrics_path.read_text(encoding="utf-8"))["status"] == "done"
     assert project.exists(EVAL_VAL_FILE)
+
+
+def test_the_preamble_names_the_image_checkpoint_and_the_tabular_one(tmp_path):
+    # clean_project and clean_image_project both wrap the same function-scoped `project`
+    # fixture, so they cannot both be requested by one test without one overwriting the
+    # other's files; build two independent projects under tmp_path instead.
+    from conftest import write_clean_image_project, write_clean_project
+
+    from mlagent.project import Project
+    from mlagent.stages.train import TrainStage
+
+    image_project = prepared_image(
+        write_clean_image_project(Project(tmp_path / "image_demo"))
+    )
+    ctx, shown, _figures = make_ctx(image_project)
+    TrainStage().prepare(ctx)
+    joined = " ".join(shown)
+    assert "checkpoints/model.pt" in joined
+    assert "[[GPU]] if this runtime" in joined
+
+    tabular_project = prepared(
+        write_clean_project(Project(tmp_path / "tabular_demo"), "tabular_classification")
+    )
+    ctx, shown, _figures = make_ctx(tabular_project)
+    TrainStage().prepare(ctx)
+    joined = " ".join(shown)
+    assert "checkpoints/best.joblib" in joined
+    assert "runs on the [[CPU]] for tabular data" in joined

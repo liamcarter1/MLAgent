@@ -50,8 +50,14 @@ def build_run_entry(
     }
 
 
-def archive_run(project: Project, run_id: int) -> list[Path]:
-    """Freeze this run's figures and checkpoint under `run{N}` names."""
+def archive_run(project: Project, run_id: int, checkpoint: str | None = None) -> list[Path]:
+    """Freeze this run's figures and checkpoint under `run{N}` names.
+
+    `checkpoint` is the run's own relative path out of `metrics.json` -- `.joblib` for a
+    tabular run, `.pt` for an image run. The archived copy keeps that suffix, so nothing
+    downstream has to know which family produced it. `None` means a run logged before
+    `train.py` recorded the key; fall back to the tabular name.
+    """
     archived: list[Path] = []
     curves = project.plots_dir / CURVES_FIGURE
     if curves.exists():
@@ -62,9 +68,10 @@ def archive_run(project: Project, run_id: int) -> list[Path]:
         target = project.plots_dir / f"run{run_id}_{source.name}"
         shutil.copy2(source, target)
         archived.append(target)
-    best = project.checkpoints_dir / BEST_CHECKPOINT
+    relative = Path(checkpoint or f"checkpoints/{BEST_CHECKPOINT}")
+    best = project.root / relative
     if best.exists():
-        shutil.copy2(best, project.checkpoints_dir / f"run{run_id}.joblib")
+        shutil.copy2(best, project.checkpoints_dir / f"run{run_id}{relative.suffix}")
     return archived
 
 
@@ -134,12 +141,11 @@ def log_finished_run(project: Project, applied_diff: dict | None = None) -> Logg
                          new=False)
     ok = metrics.get("status") == "done"
     run_id = len(runs) + 1
-    figures = archive_run(project, run_id) if ok else []
+    relative = Path(str(metrics.get("checkpoint") or f"checkpoints/{BEST_CHECKPOINT}"))
+    figures = archive_run(project, run_id, str(relative.as_posix())) if ok else []
     archive_metrics(project, run_id, metrics)
-    checkpoint = (
-        f"checkpoints/run{run_id}.joblib"
-        if ok and (project.checkpoints_dir / f"run{run_id}.joblib").exists()
+    archived = project.checkpoints_dir / f"run{run_id}{relative.suffix}"
+    checkpoint = f"checkpoints/run{run_id}{relative.suffix}" if ok and archived.exists() \
         else None
-    )
     entry = append_run(project.runs_path, build_run_entry(metrics, checkpoint, applied_diff))
     return LoggedRun(entry=entry, figures=figures, new=True)

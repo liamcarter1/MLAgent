@@ -253,3 +253,108 @@ def test_model_choices_material_has_no_level_markers(clean_project):
     CodegenStage().prepare(ctx)
     text = "\n".join(shown)
     assert "<!--" not in text
+
+
+def test_labels_for_each_family_and_the_back_compat_alias():
+    from mlagent.stages.codegen import MODEL_LABELS, label_for, labels_for
+
+    assert set(labels_for("image_torch").values()) == {"tiny_cnn", "small_cnn", "resnet18"}
+    assert set(labels_for("tabular_sklearn").values()) == {
+        "linear", "random_forest", "gradient_boosting"
+    }
+    assert MODEL_LABELS == labels_for("tabular_sklearn")
+    assert label_for("image_torch", "resnet18") == "Pretrained ResNet-18"
+    assert label_for("tabular_sklearn", "linear") == "Linear / logistic regression"
+
+
+def test_the_image_labels_cover_every_model_type_in_the_schema():
+    from mlagent.stages.codegen import labels_for
+    from mlagent.templates_io import load_schema, model_types
+
+    assert sorted(labels_for("image_torch").values()) == sorted(
+        model_types(load_schema("image_torch"))
+    )
+
+
+def test_fallback_model_is_family_aware():
+    from mlagent.stages.codegen import fallback_model
+
+    assert fallback_model({"clean_n_rows": 100}, "tabular_sklearn") == "linear"
+    assert fallback_model({"clean_n_rows": 5000}, "tabular_sklearn") == "gradient_boosting"
+    assert fallback_model({"clean_n_rows": 100}, "image_torch") == "small_cnn"
+
+
+def test_check_data_accepts_a_clean_image_project(clean_image_project):
+    from mlagent.stages.codegen import check_data
+
+    project = clean_image_project
+    assert check_data(project.read_json("data_meta.json"), project.root) == []
+
+
+def test_check_data_reports_a_missing_image_file(clean_image_project):
+    from mlagent.stages.codegen import check_data
+
+    project = clean_image_project
+    (project.data_clean / "data.npz").unlink()
+    problems = check_data(project.read_json("data_meta.json"), project.root)
+    assert problems and "data.npz" in problems[0]
+
+
+def test_check_data_reports_too_few_image_classes(clean_image_project):
+    from mlagent.stages.codegen import check_data
+
+    project = clean_image_project
+    meta = {**project.read_json("data_meta.json"), "n_classes": 1}
+    problems = check_data(meta, project.root)
+    assert any("2 classes" in p for p in problems)
+
+
+def test_codegen_on_an_image_project_writes_the_image_template_and_config(clean_image_project):
+    from mlagent.llm import FakeLLM
+    from mlagent.stages.base import StageContext
+    from mlagent.stages.codegen import CodegenStage
+    from mlagent.templates_io import load_schema, schema_for, validate_config
+    from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
+
+    project = clean_image_project
+    shown: list[str] = []
+    ctx = StageContext(
+        project=project, llm=FakeLLM([]),
+        questioner=FormQuestioner({"codegen.model_type": "Small CNN"},
+                                  ScriptedQuestioner(["y"])),
+        explainer=None, display=shown.append,
+        display_figure=lambda path, caption="": None,
+    )
+    stage = CodegenStage()
+    stage.prepare(ctx)
+
+    for name in ("data.py", "model.py", "train.py", "evaluate.py"):
+        assert project.exists(name)
+    source = (project.root / "model.py").read_text(encoding="utf-8")
+    assert "SmallCNN" in source
+    config = project.read_json("config.json")
+    assert config["model_type"] == "small_cnn"
+    flat = schema_for(load_schema("image_torch"), "small_cnn")
+    assert validate_config(config, flat) == []
+    assert stage.is_complete(ctx) is True
+    assert any("CNN" in text for text in shown)
+
+
+def test_the_image_model_choices_material_is_shown(clean_image_project):
+    from mlagent.llm import FakeLLM
+    from mlagent.stages.base import StageContext
+    from mlagent.stages.codegen import CodegenStage
+    from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
+
+    project = clean_image_project
+    shown: list[str] = []
+    ctx = StageContext(
+        project=project, llm=FakeLLM([]),
+        questioner=FormQuestioner({"codegen.model_type": "Tiny CNN"},
+                                  ScriptedQuestioner(["y"])),
+        explainer=None, display=shown.append,
+        display_figure=lambda path, caption="": None,
+    )
+    CodegenStage().prepare(ctx)
+    joined = "\n".join(shown)
+    assert "ResNet" in joined and "transfer learning" in joined.lower()

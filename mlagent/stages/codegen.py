@@ -29,13 +29,36 @@ from mlagent.templates_io import (
 
 MAX_LISTED = 20
 SMALL_DATA_ROWS = 300
-MODEL_LABELS = {
-    "Linear / logistic regression": "linear",
-    "Random forest": "random_forest",
-    "Gradient boosting": "gradient_boosting",
+MODEL_LABELS_BY_FAMILY: dict[str, dict[str, str]] = {
+    "tabular_sklearn": {
+        "Linear / logistic regression": "linear",
+        "Random forest": "random_forest",
+        "Gradient boosting": "gradient_boosting",
+    },
+    "image_torch": {
+        "Tiny CNN": "tiny_cnn",
+        "Small CNN": "small_cnn",
+        "Pretrained ResNet-18": "resnet18",
+    },
 }
-LABEL_FOR_MODEL = {code: label for label, code in MODEL_LABELS.items()}
+# Kept as the tabular map so `codegen.MODEL_LABELS` still resolves for older callers.
+MODEL_LABELS = MODEL_LABELS_BY_FAMILY["tabular_sklearn"]
+FALLBACK_MODEL_BY_FAMILY = {"tabular_sklearn": "gradient_boosting", "image_torch": "small_cnn"}
 ASK_LABEL = "Ask me after the explanation"
+
+
+def labels_for(family: str) -> dict[str, str]:
+    """The label -> model_type map for one template family."""
+    return MODEL_LABELS_BY_FAMILY[family]
+
+
+def label_for(family: str, code: str) -> str:
+    """The human label for one model_type, or the code itself if it has none."""
+    for label, value in MODEL_LABELS_BY_FAMILY.get(family, {}).items():
+        if value == code:
+            return label
+    return code
+
 
 PROPOSE_TOOL = ToolSpec(
     name="propose_config",
@@ -54,35 +77,63 @@ PROPOSE_TOOL = ToolSpec(
     handler=lambda inp: "recorded",
 )
 
-RECOMMEND_TOOL = ToolSpec(
-    name="recommend_model",
-    description=(
-        "Recommend one model family for this dataset. `reason` is shown to the user before "
-        "they choose, so make it about their data, not about models in general."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "model_type": {"type": "string", "enum": list(MODEL_LABELS.values())},
-            "reason": {"type": "string"},
+def recommend_tool(choices: list[str], handler) -> ToolSpec:
+    return ToolSpec(
+        name="recommend_model",
+        description=(
+            "Recommend one model family for this dataset. `reason` is shown to the user "
+            "before they choose, so make it about their data, not about models in general."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "model_type": {"type": "string", "enum": list(choices)},
+                "reason": {"type": "string"},
+            },
+            "required": ["model_type", "reason"],
         },
-        "required": ["model_type", "reason"],
-    },
-    handler=lambda inp: "recorded",
-)
+        handler=handler,
+    )
 
 
-def fallback_model(meta: dict) -> str:
+def fallback_model(meta: dict, family: str = "tabular_sklearn") -> str:
     """What to recommend when Claude is unreachable: flexibility needs rows."""
+    default = FALLBACK_MODEL_BY_FAMILY.get(family, "gradient_boosting")
+    if family != "tabular_sklearn":
+        return default
     try:
         rows = int(meta.get("clean_n_rows") or 0)
     except (TypeError, ValueError):
-        return "gradient_boosting"
-    return "linear" if 0 < rows < SMALL_DATA_ROWS else "gradient_boosting"
+        return default
+    return "linear" if 0 < rows < SMALL_DATA_ROWS else default
+
+
+def _check_splits(meta: dict) -> list[str]:
+    splits = meta.get("splits") or {}
+    fractions = [float(splits.get(k, 0)) for k in ("train", "val", "test")]
+    if abs(sum(fractions) - 1.0) > 0.01 or any(f <= 0 for f in fractions):
+        return [f"split fractions {splits} must be positive and sum to 1"]
+    return []
+
+
+def _check_image_data(meta: dict, project_root: Path) -> list[str]:
+    problems: list[str] = []
+    clean_path = project_root / str(meta.get("clean_path") or "data/clean/data.npz")
+    if not clean_path.exists():
+        return [f"clean image file {clean_path.name} is missing; rerun the clean stage"]
+    if not (clean_path.parent / "manifest.csv").exists():
+        problems.append("manifest.csv is missing next to the clean images")
+    if int(meta.get("n_classes") or 0) < 2:
+        problems.append("image classification needs at least 2 classes")
+    if int(meta.get("clean_n_rows") or 0) < 2:
+        problems.append("no images are available for training")
+    return problems + _check_splits(meta)
 
 
 def check_data(meta: dict, project_root: Path) -> list[str]:
     """Problems that would make training impossible; empty list means go ahead."""
+    if meta.get("modality") == "image":
+        return _check_image_data(meta, project_root)
     problems: list[str] = []
     clean_path = project_root / str(meta.get("clean_path") or "data/clean/data.csv")
     if not clean_path.exists():
@@ -94,11 +145,7 @@ def check_data(meta: dict, project_root: Path) -> list[str]:
     features = [c for c in meta.get("feature_columns") or [] if c in columns and c != target]
     if not features:
         problems.append("no feature columns are available for training")
-    splits = meta.get("splits") or {}
-    fractions = [float(splits.get(k, 0)) for k in ("train", "val", "test")]
-    total = sum(fractions)
-    if abs(total - 1.0) > 0.01 or any(f <= 0 for f in fractions):
-        problems.append(f"split fractions {splits} must be positive and sum to 1")
+    problems += _check_splits(meta)
     if meta.get("task_type") == "tabular_classification" and (meta.get("n_classes") or 0) < 2:
         problems.append("classification needs at least 2 classes in the target")
     return problems
@@ -107,6 +154,7 @@ def check_data(meta: dict, project_root: Path) -> list[str]:
 def meta_summary(meta: dict) -> dict:
     features = list(meta.get("feature_columns") or [])
     labels = list(meta.get("class_labels") or [])
+    modality = meta.get("modality", "tabular")
     return {
         "task_type": meta.get("task_type"),
         "target": meta.get("target"),
@@ -117,6 +165,9 @@ def meta_summary(meta: dict) -> dict:
         "n_classes": meta.get("n_classes"),
         "class_labels": labels[:MAX_LISTED],
         "splits": meta.get("splits"),
+        "modality": modality,
+        "image_size": meta.get("image_size"),
+        "n_images": meta.get("clean_n_rows") if modality == "image" else None,
     }
 
 
@@ -140,7 +191,8 @@ class CodegenStage:
 
     def prepare(self, ctx: StageContext) -> None:
         spec = ctx.spec()
-        template = modality_for(spec.task_type).template_family
+        modality = modality_for(spec.task_type)
+        template = modality.template_family
         meta = ctx.project.read_json(META_FILE) or {}
         problems = check_data(meta, ctx.project.root)
         if problems:
@@ -148,7 +200,7 @@ class CodegenStage:
             return None
 
         nested = load_schema(template)
-        model_type = self._choose_model(ctx, spec, meta, nested)
+        model_type = self._choose_model(ctx, spec, meta, nested, modality)
         schema = schema_for(nested, model_type)
 
         proposal, rationale = self._propose(ctx, spec, meta, schema)
@@ -160,9 +212,9 @@ class CodegenStage:
         files = ", ".join(f"`{p.name}`" for p in written) + ", `config.json`"
         message = [
             f"I wrote the training project into the project folder: {files}.",
-            f"`train.py` trains a **{LABEL_FOR_MODEL[model_type]}** model; each [[epoch]] "
-            "adds capacity and records train and validation [[loss]] so we can watch for "
-            "[[overfitting]]. `evaluate.py` scores a saved model on one split.",
+            f"`train.py` trains a **{label_for(template, model_type)}** model; each "
+            "[[epoch]] is one pass that records train and validation [[loss]] so we can "
+            "watch for [[overfitting]]. `evaluate.py` scores one saved model on one split.",
             "",
             rationale,
             "",
@@ -188,24 +240,23 @@ class CodegenStage:
     def _walkthrough(self, ctx: StageContext, written: list[Path]) -> None:
         ctx.teaching().walkthrough(written)
 
-    def _choose_model(self, ctx: StageContext, spec: Spec, meta: dict, nested: dict) -> str:
-        recommended, reason = self._recommend(ctx, spec, meta, nested)
-        ctx.display(material("model_choices", ctx.learning_level()))
-        ctx.display(f"**My recommendation: {LABEL_FOR_MODEL[recommended]}.** {reason}")
-        options = [ASK_LABEL, *MODEL_LABELS]
+    def _choose_model(self, ctx, spec, meta: dict, nested: dict, modality) -> str:
+        family = modality.template_family
+        labels = labels_for(family)
+        recommended, reason = self._recommend(ctx, spec, meta, nested, modality)
+        ctx.display(material(modality.teaching_material, ctx.learning_level()))
+        ctx.display(f"**My recommendation: {label_for(family, recommended)}.** {reason}")
         answer = ctx.questioner.choice(
-            f"Which model shall I set up? (I recommend {LABEL_FOR_MODEL[recommended]})",
-            options,
-            allow_other=False,
-            key="codegen.model_type",
+            f"Which model shall I set up? (I recommend {label_for(family, recommended)})",
+            [ASK_LABEL, *labels], allow_other=False, key="codegen.model_type",
         )
         if answer == ASK_LABEL:
             return recommended
-        return MODEL_LABELS.get(answer, recommended)
+        return labels.get(answer, recommended)
 
-    def _recommend(
-        self, ctx: StageContext, spec: Spec, meta: dict, nested: dict
-    ) -> tuple[str, str]:
+    def _recommend(self, ctx, spec, meta: dict, nested: dict, modality) -> tuple[str, str]:
+        family = modality.template_family
+        choices = model_types(nested)
         captured: dict = {}
 
         def handler(inp: dict) -> str:
@@ -213,39 +264,28 @@ class CodegenStage:
             captured["reason"] = str(inp.get("reason") or "")
             return "recorded"
 
-        tool = ToolSpec(
-            name=RECOMMEND_TOOL.name,
-            description=RECOMMEND_TOOL.description,
-            input_schema=RECOMMEND_TOOL.input_schema,
-            handler=handler,
-        )
+        tool = recommend_tool(choices, handler)
         prompt = json.dumps(
-            {
-                "spec": spec.to_dict(),
-                "data": meta_summary(meta),
-                "model_choices": model_types(nested),
-                "task": "recommend one model family",
-            },
-            indent=2,
-            default=str,
+            {"spec": spec.to_dict(), "data": meta_summary(meta), "model_choices": choices,
+             "task": "recommend one model family"},
+            indent=2, default=str,
         )
         try:
             ctx.llm.run(
                 load_prompt("codegen", audience=audience(spec.learning_level)),
-                [{"role": "user", "content": prompt}],
-                [tool],
+                [{"role": "user", "content": prompt}], [tool],
             )
         except LLMError as exc:
-            chosen = fallback_model(meta)
+            chosen = fallback_model(meta, family)
             rows = meta.get("clean_n_rows")
-            size = f" ({rows} rows)" if rows is not None else ""
+            size = f" ({rows} examples)" if rows is not None else ""
             return chosen, (
                 f"(The assistant was unavailable: {exc}.) Going by the size of the dataset"
-                f"{size}, {LABEL_FOR_MODEL[chosen]} is the safe default."
+                f"{size}, {label_for(family, chosen)} is the safe default."
             )
         chosen = captured.get("model_type") or ""
-        if chosen not in MODEL_LABELS.values():
-            chosen = fallback_model(meta)
+        if chosen not in choices:
+            chosen = fallback_model(meta, family)
         return chosen, captured.get("reason") or "It suits the shape of this dataset."
 
     def _propose(self, ctx: StageContext, spec: Spec, meta: dict, schema: dict) -> tuple[dict, str]:
