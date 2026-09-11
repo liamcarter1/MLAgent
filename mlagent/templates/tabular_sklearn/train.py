@@ -2,7 +2,7 @@
 
 Usage (run from the project folder):
   python train.py                one full training run
-  python train.py --dry-run      one round; prints timing and n_train, writes nothing
+  python train.py --dry-run      times three training chunks, writes dry_run.json only
 
 After training, run `evaluate.py` to score the saved checkpoint and draw its figures.
 """
@@ -42,6 +42,8 @@ CONFIG_FILE = "config.json"
 METRICS_FILE = "metrics.json"
 CHECKPOINT = Path("checkpoints") / "best.joblib"
 CURVES_FIGURE = Path("plots") / "training_curves.png"
+DRY_RUN_FILE = "dry_run.json"
+DRY_RUN_BATCHES = 3
 
 # --- captions ---
 # Byte-identical to the matching entry in mlagent/captions.py (tests/test_template_train.py
@@ -161,30 +163,47 @@ def draw_curves(project_dir: Path, epochs: list[dict], metric: str) -> None:
     plt.close(fig)
 
 
-# --- training ---
+# --- Dry run ---
 def dry_run_timing(project_dir: Path) -> dict:
-    """Time one real fit_epoch for whichever family is configured; write nothing."""
+    """Time three real training chunks so the agent can estimate the whole run.
+
+    One `fit_epoch` call is this family's "batch": gradient boosting adds
+    `iters_per_epoch` trees, the forest adds `trees_per_epoch`, the linear model takes one
+    gradient pass. The first call is a warm-up and is not timed, so one-off costs
+    (sklearn's first-call imports, the data cache warming) stay out of the number.
+    Writes `dry_run.json` and nothing else: no metrics.json, no checkpoint, no figure.
+    """
     config = read_json(project_dir / CONFIG_FILE, default={}) or {}
     data = load_data(project_dir, config)
     model = build_model(config, data["task_type"], data["categorical_mask"])
     n_train = int(len(data["X_train"]))
-    t0 = time.time()
-    model.fit_epoch(data["X_train"], data["y_train"])
-    seconds_per_epoch = round(time.time() - t0, 4)
-    print(json.dumps({
-        "seconds_per_epoch": seconds_per_epoch,
+    model.fit_epoch(data["X_train"], data["y_train"])          # warm-up, not timed
+    started = time.time()
+    for _ in range(DRY_RUN_BATCHES):
+        model.fit_epoch(data["X_train"], data["y_train"])
+    elapsed = time.time() - started
+    seconds_per_batch = round(elapsed / DRY_RUN_BATCHES, 4)
+    batches_per_epoch = 1
+    record = {
+        "device": "cpu",
+        "gpu_name": None,
+        "batches_per_epoch": batches_per_epoch,
+        "seconds_per_batch": seconds_per_batch,
+        "seconds_per_epoch": round(seconds_per_batch * batches_per_epoch, 4),
         "n_train": n_train,
-    }), flush=True)
-    metrics = empty_metrics()
-    metrics["seconds_per_epoch"] = seconds_per_epoch
-    metrics["n_train"] = n_train
-    return metrics
+        "script": SCRIPT_NAME,
+    }
+    write_json(project_dir / DRY_RUN_FILE, record)
+    print(
+        f"Dry run: {DRY_RUN_BATCHES} batches in {elapsed:.2f} s on cpu; about "
+        f"{seconds_per_batch:.3f} s per batch, {batches_per_epoch} batches per epoch",
+        flush=True,
+    )
+    return record
 
 
-def train(project_dir: Path, dry_run: bool = False) -> dict:
-    if dry_run:
-        return dry_run_timing(project_dir)
-
+# --- training ---
+def train(project_dir: Path) -> dict:
     config = read_json(project_dir / CONFIG_FILE, default={}) or {}
     data = load_data(project_dir, config)
     task_type = data["task_type"]
@@ -289,26 +308,31 @@ def cli_argv() -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train the model and record every epoch.")
     parser.add_argument("--project", default=".", help="project folder (default: cwd)")
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="time three training chunks and write dry_run.json only")
     args = parser.parse_args(argv)
     project_dir = Path(args.project).resolve()
+    if args.dry_run:
+        try:
+            dry_run_timing(project_dir)
+        except Exception as exc:  # noqa: BLE001 - the agent reads the exit code and stderr
+            traceback.print_exc()
+            print(f"error: {exc}", file=sys.stderr, flush=True)
+            return 1
+        return 0
     try:
-        if not args.dry_run:
-            # Fresh placeholders before training starts, so a failure before the first
-            # save() cannot leave a previous run's epochs/best metric on disk.
-            write_json(project_dir / METRICS_FILE, empty_metrics())
-        metrics = train(project_dir, dry_run=args.dry_run)
+        # Fresh placeholders before training starts, so a failure before the first
+        # save() cannot leave a previous run's epochs/best metric on disk.
+        write_json(project_dir / METRICS_FILE, empty_metrics())
+        metrics = train(project_dir)
         return 0 if metrics["status"] != "failed" else 1
     except Exception as exc:  # noqa: BLE001 - record any failure for the debrief
         traceback.print_exc()
-        if not args.dry_run:
-            read_metrics = read_json(project_dir / METRICS_FILE, default=None) or {}
-            existing = {**empty_metrics(), **read_metrics}
-            existing["status"] = "failed"
-            existing["error"] = f"{type(exc).__name__}: {exc}"
-            write_json(project_dir / METRICS_FILE, existing)
-        else:
-            print(f"error: {exc}", flush=True)
+        read_metrics = read_json(project_dir / METRICS_FILE, default=None) or {}
+        existing = {**empty_metrics(), **read_metrics}
+        existing["status"] = "failed"
+        existing["error"] = f"{type(exc).__name__}: {exc}"
+        write_json(project_dir / METRICS_FILE, existing)
         return 1
 
 

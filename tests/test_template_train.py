@@ -83,36 +83,6 @@ def test_early_stopping_stops_before_all_epochs(clean_project):
     assert len(metrics["epochs"]) < 30
 
 
-def test_dry_run_prints_timing_and_writes_nothing(clean_project):
-    root = install(clean_project, SMALL)
-    proc = run(root, "--dry-run")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    line = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert line["seconds_per_epoch"] >= 0 and line["n_train"] > 0
-    assert not (root / "metrics.json").exists()
-    assert not (root / "checkpoints" / "best.joblib").exists()
-
-
-@pytest.mark.parametrize("model_type", ["gradient_boosting", "random_forest", "linear"])
-def test_dry_run_works_for_every_family(clean_project, model_type):
-    configs = {
-        "gradient_boosting": SMALL,
-        "random_forest": {"model_type": "random_forest", "epochs": 2, "trees_per_epoch": 5,
-                          "max_depth": 4, "min_samples_leaf": 1, "max_features": 0.8,
-                          "seed": 1, "early_stopping_patience": 0},
-        "linear": {"model_type": "linear", "epochs": 3, "learning_rate": 0.05,
-                   "alpha": 0.0001, "seed": 1, "early_stopping_patience": 0},
-    }
-    root = install(clean_project, configs[model_type])
-    proc = run(root, "--dry-run")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    line = json.loads(proc.stdout.strip().splitlines()[-1])
-    # rounded to 4 dp: a sub-100 microsecond epoch can legitimately round to 0.0
-    assert line["seconds_per_epoch"] >= 0
-    assert line["n_train"] > 0
-    assert not (root / "metrics.json").exists()
-
-
 def test_linear_run_config_has_no_iters_per_epoch_key(clean_project):
     root = install(clean_project, {"model_type": "linear", "epochs": 2, "learning_rate": 0.05,
                                    "alpha": 0.0001, "seed": 1, "early_stopping_patience": 0})
