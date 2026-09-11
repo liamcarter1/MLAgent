@@ -225,27 +225,14 @@ def dry_run_timing(project_dir: Path) -> dict:
     augment = str(config.get("augment", "basic")) != "none"
     batches_per_epoch = len(loader)
 
-    def step(batch) -> None:
-        batch_x, batch_y = batch
-        if augment:
-            batch_x = augment_batch(batch_x, generator)
-        batch_x = batch_x.to(device)
-        batch_y = batch_y.to(device)
-        optimiser.zero_grad(set_to_none=True)
-        loss = loss_fn(model(batch_x), batch_y)
-        loss.backward()
-        optimiser.step()
-
     batches = _dry_batches(loader, DRY_RUN_BATCHES + 1)
     if not batches:
         raise ValueError("the training split has no batches to time")
-    model.train()
-    step(batches[0])                                   # warm-up, not timed
+    fit_epoch(model, batches[:1], optimiser, loss_fn, device, augment, generator)
     if device == "cuda":
         torch.cuda.synchronize()
     started = time.time()
-    for batch in batches[1:]:
-        step(batch)
+    fit_epoch(model, batches[1:], optimiser, loss_fn, device, augment, generator)
     if device == "cuda":
         torch.cuda.synchronize()
     elapsed = time.time() - started
