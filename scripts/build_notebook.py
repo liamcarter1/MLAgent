@@ -125,7 +125,8 @@ cells = [
         "DATA_SOURCE = 'Synthetic data'  #@param ['Synthetic data', "
         "'Upload or Google Drive path', 'HuggingFace Hub dataset']",
         "#@markdown **MINUTES_PER_RUN** — How long one training run may take. `10` is plenty "
-        "for small tables; the assistant keeps its settings within this budget.",
+        "for small tables; the assistant keeps its settings within this budget, and the cost "
+        "gate compares each run's estimate against this before it starts.",
         "MINUTES_PER_RUN = 10  #@param {type:'integer'}",
         "#@markdown **MAX_ROUNDS** — How many times the assistant may suggest an improvement "
         "and retrain after the first run. `3` to `5` is typical.",
@@ -261,8 +262,18 @@ cells = [
         "MODEL = 'Ask me after the explanation'  #@param "
         "['Ask me after the explanation', 'Linear / logistic regression', 'Random forest', "
         "'Gradient boosting', 'Tiny CNN', 'Small CNN', 'Pretrained ResNet-18']",
+        "#@markdown **PRICE_PER_UNIT** — What one Colab compute unit costs you, so the "
+        "estimate can show money. Colab Pro is $9.99 for 100 compute units, so `0.0999` "
+        "per unit; check your plan in the Resources panel.",
+        "PRICE_PER_UNIT = 0.0999  #@param {type:'number'}",
+        "#@markdown **CURRENCY** — Shown next to the cost estimate, e.g. `$` or `GBP`.",
+        "CURRENCY = '$'  #@param {type:'string'}",
         "",
-        "orch.run(until='train', answers={'codegen.model_type': MODEL})",
+        "orch.run(until='train', answers={",
+        "    'codegen.model_type': MODEL,",
+        "    'train.price_per_unit': PRICE_PER_UNIT,",
+        "    'train.currency': CURRENCY,",
+        "})",
     ),
     script_cell("train", 0),
     script_cell("train", 1),

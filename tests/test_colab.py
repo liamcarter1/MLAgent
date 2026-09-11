@@ -142,7 +142,7 @@ def test_every_param_field_has_a_hint_naming_it():
             assert label_match.group(1).lower() == var_name.lower(), (
                 f"hint label {label_match.group(1)!r} does not name field {var_name!r}"
             )
-    assert checked == 28  # every #@param field across the four form cells was checked
+    assert checked == 30  # every #@param field across the four form cells was checked
 
 
 def test_every_form_cell_has_a_purpose_line_after_its_title():
@@ -293,6 +293,55 @@ def test_the_intro_mentions_image_tasks():
 def test_the_gpu_hint_no_longer_defers_images_to_a_later_milestone():
     intake = next(s for s in notebook_sources() if "#@title 1. Project" in s)
     assert "later milestone" not in intake
+
+
+def test_the_model_cell_has_the_price_and_currency_fields_with_hints():
+    source = model_cell()
+    for field in ("PRICE_PER_UNIT", "CURRENCY"):
+        assert f"{field} = " in source, field
+        assert f"**{field}**" in source, field
+    assert "Resources panel" in source
+    assert "next to the cost estimate" in source
+
+
+def test_the_model_cell_defaults_match_rates_json():
+    from mlagent.cost import load_rates
+
+    rates = load_rates()
+    source = model_cell()
+    assert f"PRICE_PER_UNIT = {rates['default_price_per_unit']}  #@param" in source
+    assert f"CURRENCY = '{rates['default_currency']}'  #@param" in source
+
+
+def test_the_model_cell_passes_every_cost_answer_key():
+    source = model_cell()
+    for key in ("codegen.model_type", "train.price_per_unit", "train.currency"):
+        assert f"'{key}'" in source, key
+
+
+def test_the_train_answer_keys_the_model_cell_sends_are_ones_the_gate_reads():
+    import re
+
+    source = Path("mlagent/stages/cost_gate.py").read_text(encoding="utf-8")
+    used = set(re.findall(r'key="(train\.[a-z_]+)"', source))
+    sent = set(re.findall(r"'(train\.[a-z_]+)'", model_cell()))
+    assert sent <= used, sent - used
+
+
+def test_the_tune_cell_gains_no_form_fields():
+    tune = next(s for s in notebook_sources() if "#@title 6. Tune" in s)
+    assert "#@param" not in tune
+    assert "PRICE_PER_UNIT" not in tune
+
+
+def test_the_minutes_per_run_hint_mentions_the_cost_gate():
+    intake = next(s for s in notebook_sources() if "#@title 1. Project" in s)
+    line = next(ln for ln in intake.splitlines() if "**MINUTES_PER_RUN**" in ln)
+    assert "cost gate" in line
+
+
+def test_the_notebook_is_still_twenty_one_cells():
+    assert len(notebook_sources()) == 21
 
 
 def test_the_notebook_is_up_to_date_with_the_builder():

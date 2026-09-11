@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from functools import partial
 from pathlib import Path
 
-from mlagent import cost, runlog
+from conftest import cpu_gate
+
+from mlagent import runlog
 from mlagent.diagnose import Diagnosis
 from mlagent.llm import FakeLLM
 from mlagent.stages import cost_gate
@@ -23,15 +24,6 @@ from mlagent.stages.tune import (
     load_tune_state,
 )
 from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
-
-
-def cpu_gate(seconds_per_epoch: float = 0.2):
-    dry = cost.DryRunResult(device="cpu", gpu_name=None, batches_per_epoch=1,
-                            seconds_per_batch=seconds_per_epoch,
-                            seconds_per_epoch=seconds_per_epoch, n_train=168,
-                            script="train.py")
-    return partial(cost_gate.gate, probes=(), dry_runner=lambda project_dir, **kw: dry)
-
 
 FAILED_METRICS = {
     "status": "failed", "started_at": "2026-09-10T09:00:00.000000+00:00",

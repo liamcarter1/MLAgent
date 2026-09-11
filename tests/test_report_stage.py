@@ -3,27 +3,17 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from functools import partial
 from pathlib import Path
 
+from conftest import cpu_gate
+
 from mlagent import config as cfg
-from mlagent import cost
 from mlagent.llm import FakeLLM
-from mlagent.stages import cost_gate
 from mlagent.stages.base import Handoff, StageContext
 from mlagent.stages.codegen import CodegenStage
 from mlagent.stages.report import EVAL_TEST_FILE, ReportStage, render_report
 from mlagent.stages.train import TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
-
-
-def cpu_gate(seconds_per_epoch: float = 0.2):
-    """The real gate with no hardware probe and no subprocess dry run."""
-    dry = cost.DryRunResult(device="cpu", gpu_name=None, batches_per_epoch=1,
-                            seconds_per_batch=seconds_per_epoch,
-                            seconds_per_epoch=seconds_per_epoch, n_train=168,
-                            script="train.py")
-    return partial(cost_gate.gate, probes=(), dry_runner=lambda project_dir, **kw: dry)
 
 
 def run_cells(project, handoff):

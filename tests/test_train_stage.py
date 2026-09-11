@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from functools import partial
 from pathlib import Path
 
 import pytest
+from conftest import cpu_gate
 
-from mlagent import cost, runlog
+from mlagent import runlog
 from mlagent.llm import FakeLLM
 from mlagent.runs import archive_run, build_run_entry
 from mlagent.stages import cost_gate
@@ -18,19 +18,6 @@ from mlagent.stages.train import EVAL_VAL_FILE, TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
 
 SMALL = {"epochs": 3, "iters_per_epoch": 3, "early_stopping_patience": 0}
-
-
-def cpu_gate(seconds_per_epoch: float = 0.2):
-    """The real gate with no hardware probe and no subprocess dry run.
-
-    0.2 s/epoch over the fixture's 3 epochs is 0.012 minutes against a 5 minute budget,
-    so the gate is silent and asks nothing -- exactly the beginner-on-CPU path.
-    """
-    dry = cost.DryRunResult(device="cpu", gpu_name=None, batches_per_epoch=1,
-                            seconds_per_batch=seconds_per_epoch,
-                            seconds_per_epoch=seconds_per_epoch, n_train=168,
-                            script="train.py")
-    return partial(cost_gate.gate, probes=(), dry_runner=lambda project_dir, **kw: dry)
 
 
 def stopping_gate(ctx, *, rounds_remaining):

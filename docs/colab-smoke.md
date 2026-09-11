@@ -27,10 +27,11 @@ Prerequisite: a project that has completed the Milestone 2 checklist (clean data
 1. Run the start cell. The codegen stage lists `data.py`, `model.py`, `train.py`, `config.json`
    in the project folder on Drive and shows a config table with a rationale. Click one
    `[[term]]` and confirm an explanation appears.
-2. Answer "y" to the configuration question. The train stage prints the CPU/no-cost-gate note,
-   then a loss/metric figure redraws in the cell as epochs complete.
+2. Answer "y" to the configuration question. On a CPU runtime the cost gate is silent (see
+   Milestone 6b below), then a loss/metric figure redraws in the cell as epochs complete.
 3. When training ends: `runs.jsonl` has one line; `plots/` contains `run1_training.png` and the
-   validation evaluation figures; the debrief mentions the best epoch.
+   validation evaluation figures; the debrief headline ends with "Estimated N min, actual M min
+   (P% under/over)."
 4. The report stage asks before touching the test set. Answer "y". `eval_test.json` and
    `report.md` appear in the project folder; open `report.md` in Drive and check the figures render.
 5. Run the "Train again" cell. A second run is logged as run 2. Re-run the report stage: if run 2
@@ -212,3 +213,41 @@ Project and interview* with **TASK = Image classification**; the cell list is un
    `config.json` by hand (say `epochs: 4`), run the *Train again* cell, then the two train
    cells, then *6. Tune*. `tune_state.json` disappears and comes back at round 1, the run
    table lists every earlier run, and the new run archives as `checkpoints/run3.pt`.
+
+## Milestone 6b: the cost gate
+
+1. **Tabular on a CPU runtime: silent and free.** Fresh project, TASK *Tabular
+   classification*, DATA_SOURCE *Synthetic data*, MINUTES_PER_RUN `10`. At *4. Model*
+   keep the defaults and run the cell. The output shows `Timing a short dry run...`, then
+   "This runtime has no GPU", the minutes/compute-units/cost table with a `$0.00` cost,
+   and "A CPU runtime uses no compute units, so this run is free." -- with **no question
+   asked**. Run `train.py` and `evaluate.py`, then the *4. Model* cell again: the debrief
+   headline ends with "Estimated N min, actual M min (P% under/over)."
+2. **Images on a T4 runtime: the table and the confirm.** Runtime > Change runtime type >
+   T4 GPU. Fresh project, TASK *Image classification*, GPU *T4 GPU*, N_IMAGES `300`,
+   IMAGE_SIZE `64`, *Small CNN*. The gate prints `Timing a short dry run...`, names the
+   Tesla T4, shows units and a non-zero cost for this run and for the remaining rounds,
+   and asks *Run it?*. Choose *Run it*, run both train cells, then *4. Model* again: the
+   estimate-vs-actual line appears.
+3. **Over budget names the epochs that fit.** Fresh project with MINUTES_PER_RUN `1` at
+   intake. At *4. Model* the gate shows an **Over budget** block naming the largest
+   `epochs` value that fits the 1-minute limit, and still asks rather than refusing.
+4. **Editing re-estimates without a second dry run.** At step 3's question choose *Edit
+   the config first*, lower `epochs` to the suggested value, choose *Done*. A second
+   table appears with the smaller number -- and **no second** `Timing a short dry run...`
+   line anywhere in the cell's output. Then choose *Run it*.
+5. **Stop leaves nothing half-done.** On a fresh over-budget project choose *Stop*. The
+   cell ends with "Change the config and run this cell again, or switch runtime, then run
+   this cell again.", `orch.waiting()` returns `None`, and no `metrics.json` was written.
+   Edit `config.json` by hand and run *4. Model* again: the gate asks its question again.
+   Also try this in a tune round: on step 6's project apply a proposal that would be
+   over budget and choose *Stop* at the gate. `config.json` still reads exactly what it did
+   before the proposal -- the refused proposal is not applied -- and `tune_state.json`'s
+   `pending` is unchanged (still `None` for a fresh round).
+6. **A tune round estimates from history.** On step 2's project run *6. Tune*, apply
+   proposal 1. The basis line reads "From run 1's measured time." and **no** dry run
+   runs. `runs.jsonl`'s second entry carries `estimated_minutes` and `estimated_units`.
+7. **The price and currency come from the form.** Fresh project: at *4. Model* set
+   PRICE_PER_UNIT `0.08` and CURRENCY `GBP`. The cost column reads `0.xx GBP`, and
+   afterwards `cost.json` holds `{"price_per_unit": 0.08, "currency": "GBP", ...}` with a
+   `last_estimate` block. Running *6. Tune* later never re-asks for either.

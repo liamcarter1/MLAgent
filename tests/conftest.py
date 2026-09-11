@@ -144,6 +144,25 @@ def clean_image_project(project: Project) -> Project:
     return write_clean_image_project(project)
 
 
+from functools import partial  # noqa: E402
+
+from mlagent import cost  # noqa: E402
+from mlagent.stages import cost_gate  # noqa: E402
+
+
+def cpu_gate(seconds_per_epoch: float = 0.2):
+    """The real gate with no hardware probe and no subprocess dry run.
+
+    0.2 s/epoch over the fixture's 3 epochs is 0.012 minutes against a 5 minute budget,
+    so the gate is silent and asks nothing -- exactly the beginner-on-CPU path.
+    """
+    dry = cost.DryRunResult(device="cpu", gpu_name=None, batches_per_epoch=1,
+                            seconds_per_batch=seconds_per_epoch,
+                            seconds_per_epoch=seconds_per_epoch, n_train=168,
+                            script="train.py")
+    return partial(cost_gate.gate, probes=(), dry_runner=lambda project_dir, **kw: dry)
+
+
 import subprocess  # noqa: E402
 import sys  # noqa: E402
 
