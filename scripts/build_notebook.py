@@ -264,9 +264,11 @@ cells = [
         "'Gradient boosting', 'Tiny CNN', 'Small CNN', 'Pretrained ResNet-18']",
         "#@markdown **PRICE_PER_UNIT** — What one Colab compute unit costs you, so the "
         "estimate can show money. Colab Pro is $9.99 for 100 compute units, so `0.0999` "
-        "per unit; check your plan in the Resources panel.",
+        "per unit; check your plan in the Resources panel. Set once per project and "
+        "stored in `cost.json` — edit that file to change it later.",
         "PRICE_PER_UNIT = 0.0999  #@param {type:'number'}",
-        "#@markdown **CURRENCY** — Shown next to the cost estimate, e.g. `$` or `GBP`.",
+        "#@markdown **CURRENCY** — Shown next to the cost estimate, e.g. `$` or `GBP`. Set "
+        "once per project and stored in `cost.json` — edit that file to change it later.",
         "CURRENCY = '$'  #@param {type:'string'}",
         "",
         "orch.run(until='train', answers={",

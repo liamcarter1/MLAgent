@@ -22,7 +22,7 @@ SMALL = {"epochs": 3, "iters_per_epoch": 3, "early_stopping_patience": 0}
 
 def stopping_gate(ctx, *, rounds_remaining):
     ctx.display(cost_gate.STOP_TEXT)
-    return "stop"
+    return cost_gate.GateResult(decision="stop", config={})
 
 
 def prepared(project):
@@ -84,7 +84,7 @@ def test_real_training_run_is_logged_archived_and_debriefed(clean_project):
     text = "\n".join(shown)
     assert "no [[compute unit]] cost gate" not in text
     assert "This runtime has no [[GPU]]." in text
-    assert "A [[CPU]] runtime uses no [[compute unit]]s, so this run is free." in text
+    assert "A [[CPU]] runtime uses no [[compute units]], so this run is free." in text
     assert "Training runs on the [[CPU]] for tabular data." in text
     assert not stage.outputs_ready(ctx, handoff)
 
@@ -329,7 +329,7 @@ def test_the_gate_is_asked_for_every_remaining_tune_round(clean_project):
 
     def recording_gate(ctx, *, rounds_remaining):
         seen.append(rounds_remaining)
-        return "run"
+        return cost_gate.GateResult(decision="run", config=ctx.project.read_json("config.json"))
 
     ctx, _shown, _figures = make_ctx(project)
     TrainStage(gate=recording_gate).prepare(ctx)
@@ -356,8 +356,9 @@ def test_the_debrief_compares_the_estimate_with_the_actual_time(clean_project):
     run_cells(project, stage.prepare(ctx))
     stage.debrief(ctx)
     text = "\n".join(shown)
-    assert "Estimated 0.0 min, actual " in text
-    assert "min (" in text and ("% under)." in text or "% over)." in text)
+    # A tiny synthetic fixture trains in well under a tenth of a minute either way, so
+    # the comparison is the fixed sentence, not a (noisy) percentage.
+    assert "Estimated and actual both under a minute." in text
     entry = runlog.read_runs(project.runs_path)[0]
     assert entry["estimated_minutes"] == pytest.approx(0.012)
     assert entry["estimated_units"] == 0.0     # a CPU run spends none
@@ -366,7 +367,8 @@ def test_the_debrief_compares_the_estimate_with_the_actual_time(clean_project):
 def test_the_debrief_omits_the_comparison_when_the_gate_made_no_estimate(clean_project):
     project = prepared(clean_project)
     ctx, shown, _figures = make_ctx(project)
-    stage = TrainStage(gate=lambda ctx, *, rounds_remaining: "run")   # never estimates
+    stage = TrainStage(gate=lambda ctx, *, rounds_remaining: cost_gate.GateResult(
+        decision="run", config=ctx.project.read_json("config.json")))   # never estimates
     run_cells(project, stage.prepare(ctx))
     stage.debrief(ctx)
     assert "Estimated" not in "\n".join(shown)

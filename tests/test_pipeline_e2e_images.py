@@ -154,7 +154,7 @@ def test_the_image_pipeline_runs_through_every_handoff(project, advance):
     text = "\n".join(shown)
     assert "Timing a short dry run..." in text
     assert "This runtime has no [[GPU]]." in text
-    assert "Estimated " in text and " min, actual " in text
+    assert "Estimated" in text
     stored = project.read_json("cost.json")["last_estimate"]
     assert stored["basis"] == "dry_run" and stored["device"] == "cpu"
 

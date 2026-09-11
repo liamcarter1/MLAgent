@@ -66,10 +66,10 @@ def test_a_cpu_run_under_budget_never_asks_and_never_stops(clean_project):
     runner = Runner(seconds_per_epoch=6.0)     # 3 epochs -> 0.36 minutes, budget is 5
     ctx, shown = make_ctx(project)             # ScriptedQuestioner with no answers at all
     decision = cost_gate.gate(ctx, rounds_remaining=3, probes=CPU_PROBES, dry_runner=runner)
-    assert decision == "run"
+    assert decision.decision == "run"
     assert runner.calls == 1
     text = "\n".join(shown)
-    assert "A [[CPU]] runtime uses no [[compute unit]]s, so this run is free." in text
+    assert "A [[CPU]] runtime uses no [[compute units]], so this run is free." in text
     assert "Timed with a 3-batch dry run." in text
     assert ctx.questioner.asked == []           # a beginner on CPU is never interrupted
 
@@ -79,7 +79,7 @@ def test_a_gpu_run_asks_and_run_it_means_run(clean_project):
     runner = Runner()
     ctx, shown = make_ctx(project, answers=[cost_gate.RUN_LABEL])
     decision = cost_gate.gate(ctx, rounds_remaining=2, probes=T4_PROBES, dry_runner=runner)
-    assert decision == "run"
+    assert decision.decision == "run"
     text = "\n".join(shown)
     assert "This runtime has a Tesla T4 [[GPU]]." in text
     assert "| minutes | [[compute units]] | cost |" in text
@@ -92,7 +92,7 @@ def test_stop_returns_stop_and_says_what_to_do_next(clean_project):
     runner = Runner()
     ctx, shown = make_ctx(project, answers=[cost_gate.STOP_LABEL])
     decision = cost_gate.gate(ctx, rounds_remaining=0, probes=T4_PROBES, dry_runner=runner)
-    assert decision == "stop"
+    assert decision.decision == "stop"
     assert cost_gate.STOP_TEXT in shown
 
 
@@ -101,7 +101,7 @@ def test_over_budget_shows_the_cuts_and_still_asks(clean_project):
     runner = Runner(seconds_per_epoch=60.0)    # 20 epochs -> 24 minutes against 5
     ctx, shown = make_ctx(project, answers=[cost_gate.RUN_LABEL])
     decision = cost_gate.gate(ctx, rounds_remaining=0, probes=CPU_PROBES, dry_runner=runner)
-    assert decision == "run"                   # the gate warns, it never refuses
+    assert decision.decision == "run"          # the gate warns, it never refuses
     text = "\n".join(shown)
     assert "**Over budget:**" in text
     assert "- lower `epochs` from 20 to 4 --" in text
@@ -119,9 +119,10 @@ def test_editing_the_config_reuses_the_measured_timing_and_re_estimates(clean_pr
         cost_gate.RUN_LABEL,         # "Run it?" again
     ])
     decision = cost_gate.gate(ctx, rounds_remaining=0, probes=CPU_PROBES, dry_runner=runner)
-    assert decision == "run"
+    assert decision.decision == "run"
     assert runner.calls == 1                   # no second dry run, ever
-    assert project.read_json("config.json")["epochs"] == 4
+    assert decision.config["epochs"] == 4       # the gate never writes config.json itself
+    assert project.read_json("config.json")["epochs"] == 20  # unchanged: the caller's job
     text = "\n".join(shown)
     assert text.count("Timed with a 3-batch dry run.") == 2
     assert "**Over budget:**" in text          # the first estimate was
@@ -147,7 +148,7 @@ def test_the_edit_option_disappears_after_three_edits(clean_project):
         cost_gate.RUN_LABEL,
     ])
     assert cost_gate.gate(ctx, rounds_remaining=0, probes=CPU_PROBES,
-                          dry_runner=runner) == "run"
+                          dry_runner=runner).decision == "run"
     assert len(seen) == 4
     assert all(cost_gate.EDIT_LABEL in options for options in seen[:3])
     assert seen[3] == [cost_gate.RUN_LABEL, cost_gate.STOP_LABEL]
@@ -162,7 +163,7 @@ def test_the_second_run_estimates_from_history_and_never_shells_out(clean_projec
     runner = Runner()
     ctx, shown = make_ctx(project, answers=[cost_gate.RUN_LABEL])
     assert cost_gate.gate(ctx, rounds_remaining=1, probes=T4_PROBES,
-                          dry_runner=runner) == "run"
+                          dry_runner=runner).decision == "run"
     assert runner.calls == 0
     assert "From run 1's measured time." in "\n".join(shown)
 
@@ -185,7 +186,7 @@ def test_a_failed_dry_run_says_so_and_still_reaches_the_question(clean_project):
     runner = Runner(error="The dry run failed (exit 1).\n\n```\nValueError: boom\n```")
     ctx, shown = make_ctx(project, answers=[cost_gate.RUN_LABEL])
     assert cost_gate.gate(ctx, rounds_remaining=0, probes=CPU_PROBES,
-                          dry_runner=runner) == "run"
+                          dry_runner=runner).decision == "run"
     text = "\n".join(shown)
     assert "ValueError: boom" in text
     assert cost_gate.NO_ESTIMATE_TEXT in text
@@ -209,7 +210,7 @@ def test_the_price_and_currency_are_asked_once_then_reused(clean_project):
     ctx, shown = make_ctx(project, form={"train.price_per_unit": 0.05,
                                          "train.currency": "GBP"})
     assert cost_gate.gate(ctx, rounds_remaining=0, probes=CPU_PROBES,
-                          dry_runner=runner) == "run"
+                          dry_runner=runner).decision == "run"
     record = project.read_json("cost.json")
     assert record["price_per_unit"] == pytest.approx(0.05)
     assert record["currency"] == "GBP"
@@ -218,7 +219,7 @@ def test_the_price_and_currency_are_asked_once_then_reused(clean_project):
     # A second gate call on the same project reads cost.json and asks nothing.
     ctx2, _shown2 = make_ctx(project)            # no answers of any kind
     assert cost_gate.gate(ctx2, rounds_remaining=0, probes=CPU_PROBES,
-                          dry_runner=Runner()) == "run"
+                          dry_runner=Runner()).decision == "run"
     assert ctx2.questioner.asked == []
 
 
@@ -244,8 +245,25 @@ def test_the_estimate_is_persisted_for_the_debrief(clean_project):
     assert stored["gpu_type"] == "T4"
 
 
+def test_an_explicit_config_is_estimated_instead_of_the_one_on_disk(clean_project):
+    """`TuneStage` passes the round's proposed config; the gate must estimate (and let an
+    edit act on) that dict, not silently fall back to reading config.json -- and it must
+    never write config.json itself, whatever config it was given."""
+    project = priced(codegen(clean_project, config_updates={**SMALL, "epochs": 3}))
+    proposed = dict(project.read_json("config.json"), epochs=6)
+    runner = Runner(seconds_per_epoch=6.0)
+    ctx, _shown = make_ctx(project, answers=[cost_gate.RUN_LABEL])
+    result = cost_gate.gate(ctx, rounds_remaining=0, probes=CPU_PROBES, dry_runner=runner,
+                            config=proposed)
+    assert result.decision == "run"
+    assert result.config["epochs"] == 6
+    stored = project.read_json("cost.json")["last_estimate"]
+    assert stored["epochs"] == 6                # not the on-disk config's 3
+    assert project.read_json("config.json")["epochs"] == 3   # untouched by the gate
+
+
 def test_gate_is_usable_as_a_partial_the_way_the_stages_take_it(clean_project):
     project = priced(codegen(clean_project))
     bound = partial(cost_gate.gate, probes=CPU_PROBES, dry_runner=Runner())
     ctx, _shown = make_ctx(project)
-    assert bound(ctx, rounds_remaining=0) == "run"
+    assert bound(ctx, rounds_remaining=0).decision == "run"

@@ -298,13 +298,23 @@ class TuneStage(ScriptStageBase):
             project.write_json(cfg.TUNE_STATE_FILE, state)
             ctx.display(DECISION_TEXT["stopped"])
             return None
-        new_config, diff, reason = chosen
-        if self.gate(ctx, rounds_remaining=state["max_rounds"] - round_no) == "stop":
+        new_config, _diff, reason = chosen
+        # The gate estimates (and can edit) the config this round will actually train
+        # with -- the proposal, not the pre-proposal config still on disk -- so a scaled
+        # `epochs` in the proposal is reflected in the estimate, not the previous run's.
+        result = self.gate(ctx, rounds_remaining=state["max_rounds"] - round_no,
+                           config=new_config)
+        if result.decision == "stop":
             # Not a tuning decision: `decision` stays "continue" so the next orch.run()
             # diagnoses and proposes again. Nothing was written yet, so config.json and
             # tune_state.json are already untouched -- nothing to restore.
             return None
-        project.write_json(cfg.CONFIG_FILE, new_config)
+        final_config = result.config
+        # Recompute against the pre-proposal config, not the proposal, so the diff is
+        # truthful about every change the round actually applies -- the proposal's plus
+        # any edit the user made in the gate.
+        diff = diff_config(config, final_config)
+        project.write_json(cfg.CONFIG_FILE, final_config)
         state["pending"] = {
             "round": round_no,
             "applied_diff": diff,

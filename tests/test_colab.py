@@ -302,6 +302,8 @@ def test_the_model_cell_has_the_price_and_currency_fields_with_hints():
         assert f"**{field}**" in source, field
     assert "Resources panel" in source
     assert "next to the cost estimate" in source
+    assert source.count("stored in `cost.json`") == 2   # both fields say so
+    assert "edit that file to change it later" in source
 
 
 def test_the_model_cell_defaults_match_rates_json():

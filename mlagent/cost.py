@@ -256,7 +256,7 @@ class BudgetAdvice:
     suggestions: list[tuple[str, object, object, str]]
 
 
-def budget_check(estimate: Estimate, minutes_per_run: float, config: dict, schema: dict,
+def budget_check(estimate: Estimate, minutes_per_run: float, run_config: dict, schema: dict,
                  modality) -> BudgetAdvice:
     """Is this run over the intake budget, and which config keys would bring it back?
 
@@ -270,7 +270,7 @@ def budget_check(estimate: Estimate, minutes_per_run: float, config: dict, schem
         return BudgetAdvice(over=False, minutes_over=0.0, suggestions=[])
     suggestions: list[tuple[str, object, object, str]] = []
     if "epochs" in schema and estimate.minutes > 0:
-        current = int(config.get("epochs", estimate.epochs))
+        current = int(run_config.get("epochs", estimate.epochs))
         proposed = int(math.floor(current * budget / estimate.minutes))
         low = schema["epochs"].get("min")
         proposed = max(1 if low is None else int(low), min(proposed, current))
@@ -281,7 +281,7 @@ def budget_check(estimate: Estimate, minutes_per_run: float, config: dict, schem
                 f"{budget:.0f}-minute budget",
             ))
     if getattr(modality, "name", "") == "image" and "batch_size" in schema:
-        current = int(config.get("batch_size", schema["batch_size"].get("default", 32)))
+        current = int(run_config.get("batch_size", schema["batch_size"].get("default", 32)))
         proposed = min(int(schema["batch_size"].get("max", current)), current * 2)
         if proposed > current:
             suggestions.append((
@@ -307,7 +307,7 @@ def _mismatch_line(spec_gpu: str, runtime: RuntimeInfo) -> str | None:
                 "Runtime -> Change runtime type, then run this cell again.")
     if spec_gpu == "none" and runtime.device == "cuda":
         return ("You asked for no [[GPU]] at intake, but this runtime has one and spends "
-                "[[compute unit]]s. Switch with Runtime -> Change runtime type.")
+                "[[compute units]]. Switch with Runtime -> Change runtime type.")
     return None
 
 
@@ -347,12 +347,15 @@ def render_estimate(estimate: Estimate, advice: BudgetAdvice, spec_gpu: str, mod
     if estimate.note:
         lines.append(estimate.note)
     if runtime.device == "cpu":
-        lines.append("A [[CPU]] runtime uses no [[compute unit]]s, so this run is free.")
+        lines.append("A [[CPU]] runtime uses no [[compute units]], so this run is free.")
     elif getattr(modality, "name", "") == "tabular":
         lines.append("This tabular model runs on the [[CPU]], but a [[GPU]] runtime still "
-                     "spends [[compute unit]]s; switch to a CPU runtime to train for free.")
+                     "spends [[compute units]]; switch to a CPU runtime to train for free.")
 
-    if advice.over:
+    if advice.over and not advice.suggestions:
+        lines += ["", "I can't find a config change that fits the budget; a shorter run "
+                      "needs less data or a smaller model."]
+    elif advice.over:
         budget = estimate.minutes - advice.minutes_over
         lines += ["", f"**Over budget:** about {estimate.minutes:.1f} minutes against your "
                       f"{budget:.0f}-minute limit. Cuts that would fit:", ""]

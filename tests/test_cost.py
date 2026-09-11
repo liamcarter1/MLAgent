@@ -321,7 +321,7 @@ def test_render_says_a_cpu_run_is_free():
                                GB_SCHEMA, TABULAR)
     text = cost.render_estimate(est, advice, "none", TABULAR)
     assert "This runtime has no [[GPU]]." in text
-    assert "A [[CPU]] runtime uses no [[compute unit]]s, so this run is free." in text
+    assert "A [[CPU]] runtime uses no [[compute units]], so this run is free." in text
 
 
 def test_render_warns_when_intake_asked_for_a_gpu_and_there_is_none():
@@ -358,6 +358,19 @@ def test_render_lists_the_cuts_when_over_budget():
     assert "5-minute limit" in text
     assert "- lower `epochs` from 20 to 4 --" in text
     assert "IMAGE_SIZE" not in text
+
+
+def test_render_says_no_cut_fits_when_there_is_no_suggestion():
+    # epochs is already at the schema floor (1), so budget_check has nothing to suggest.
+    est = make_estimate(seconds_per_epoch=6000.0, epochs=1, runtime=CPU)
+    advice = cost.budget_check(est, 5, {"epochs": 1, "model_type": "gradient_boosting"},
+                               GB_SCHEMA, TABULAR)
+    assert advice.over is True and advice.suggestions == []
+    text = cost.render_estimate(est, advice, "none", TABULAR)
+    assert ("I can't find a config change that fits the budget; a shorter run needs less "
+            "data or a smaller model.") in text
+    assert "**Over budget:**" not in text
+    assert "Cuts that would fit" not in text
 
 
 def test_render_adds_the_reingest_sentence_for_an_over_budget_image_run():

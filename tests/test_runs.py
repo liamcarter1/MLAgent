@@ -205,7 +205,10 @@ def test_estimate_vs_actual_is_omitted_when_there_is_no_estimate():
 def test_estimate_vs_actual_handles_a_zero_minute_estimate():
     # A fast dry run on a tiny dataset can round `minutes` to exactly 0.0; per the design
     # spec the line is omitted only when `estimated_minutes is None`, not when it is 0.
+    # When both the estimate and the actual are under a tenth of a minute, a percentage
+    # is not a useful number -- rounding noise alone can swing it wildly -- so the fixed
+    # sentence is shown instead.
     assert runs.estimate_vs_actual({"estimated_minutes": 0.0, "seconds": 0.84}) == (
-        "Estimated 0.0 min, actual 0.0 min (100% over).")
+        "Estimated and actual both under a minute.")
     assert runs.estimate_vs_actual({"estimated_minutes": 0, "seconds": 0.0}) == (
-        "Estimated 0.0 min, actual 0.0 min (0% under).")
+        "Estimated and actual both under a minute.")

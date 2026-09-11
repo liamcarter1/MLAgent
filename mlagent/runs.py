@@ -79,6 +79,8 @@ def estimate_vs_actual(entry: dict) -> str | None:
     if not isinstance(seconds, int | float):
         return None
     actual = float(seconds) / 60.0
+    if float(estimated) < 0.1 and actual < 0.1:
+        return "Estimated and actual both under a minute."
     # A zero-minute estimate would divide by zero; fall back to the actual minutes (or 1.0
     # when both are zero) so the percentage stays a plain "how far off" figure.
     basis = float(estimated) or actual or 1.0

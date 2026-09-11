@@ -468,9 +468,9 @@ def test_a_cost_gate_stop_leaves_config_and_pending_untouched(clean_project):
     before_config = project.read_json("config.json")
     ctx, shown, _figures = make_ctx(project, answers=[apply_label(1)])
 
-    def stopping_gate(ctx, *, rounds_remaining):
+    def stopping_gate(ctx, *, rounds_remaining, config=None):
         ctx.display(cost_gate.STOP_TEXT)
-        return "stop"
+        return cost_gate.GateResult(decision="stop", config=config or {})
 
     assert TuneStage(gate=stopping_gate).prepare(ctx) is None
     assert cost_gate.STOP_TEXT in shown
@@ -480,13 +480,38 @@ def test_a_cost_gate_stop_leaves_config_and_pending_untouched(clean_project):
     assert not TuneStage(gate=cpu_gate()).is_complete(ctx)
 
 
+def test_a_gate_edit_is_what_gets_written_and_the_diff_stays_truthful(clean_project):
+    """The gate estimates (and can edit) the config the round will actually train with --
+    the proposal's config, not the pre-proposal config.json still on disk. `tune.py` must
+    write whatever the gate finished with, not the un-edited proposal, and the recorded
+    diff must cover every change against the pre-proposal config, not just the gate's."""
+    project = with_run_one(clean_project)     # run 1: config SMALL (epochs=3)
+    llm = FakeLLM([[("text", "pre")], *one_proposal({"epochs": 6})])
+    seen_epochs: list[int] = []
+
+    def editing_gate(ctx, *, rounds_remaining, config=None):
+        # The gate must see the proposal's epochs (6), not the stale on-disk value (3).
+        seen_epochs.append(config["epochs"])
+        edited = dict(config, epochs=2)          # the user lowers it further in the gate
+        return cost_gate.GateResult(decision="run", config=edited)
+
+    ctx, _shown, _f = make_ctx(project, llm, answers=[apply_label(1)])
+    handoff = TuneStage(gate=editing_gate).prepare(ctx)
+    assert handoff is not None
+    assert seen_epochs == [6]
+    config = project.read_json("config.json")
+    assert config["epochs"] == 2                 # the gate's edit, not the raw proposal
+    diff = project.read_json("tune_state.json")["pending"]["applied_diff"]
+    assert diff["epochs"] == {"from": 3, "to": 2}  # against the pre-proposal config
+
+
 def test_the_gate_is_asked_for_the_rounds_that_are_left(clean_project):
     project = with_run_one(clean_project)
     seen: list[int] = []
 
-    def recording_gate(ctx, *, rounds_remaining):
+    def recording_gate(ctx, *, rounds_remaining, config=None):
         seen.append(rounds_remaining)
-        return "run"
+        return cost_gate.GateResult(decision="run", config=config)
 
     ctx, _shown, _figures = make_ctx(project, answers=[apply_label(1)])
     TuneStage(gate=recording_gate).prepare(ctx)
@@ -502,4 +527,6 @@ def test_the_tune_debrief_shows_the_estimate_vs_actual_line(clean_project):
     assert handoff is not None
     run_cells(project, handoff)
     stage.debrief(ctx)
-    assert "Estimated 0.0 min, actual " in "\n".join(shown)
+    # A tiny synthetic fixture trains in well under a tenth of a minute either way, so
+    # the comparison is the fixed sentence, not a (noisy) percentage.
+    assert "Estimated and actual both under a minute." in "\n".join(shown)

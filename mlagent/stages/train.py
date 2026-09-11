@@ -53,25 +53,27 @@ class TrainStage(ScriptStageBase):
                 "Training picks its [[device]] at run time -- the [[GPU]] if this runtime "
                 "has one, otherwise the [[CPU]]."
             )
-            checkpoint_sentence = (
-                f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
-                "metric curves as it goes, and saves the best model to "
-                "`checkpoints/best.pt`."
-            )
+            checkpoint_path = "checkpoints/best.pt"
         else:
             device_sentence = "Training runs on the [[CPU]] for tabular data."
-            checkpoint_sentence = (
-                f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
-                "metric curves as it goes, and saves the best model to "
-                "`checkpoints/best.joblib`."
-            )
-        ctx.display(
-            f"{device_sentence} {checkpoint_sentence} `evaluate.py` then scores that model "
-            f"on the [[validation set]] and draws the {spec.metric} figures. Run both cells."
-        )
+            checkpoint_path = "checkpoints/best.joblib"
+        ctx.display(device_sentence)
         ctx.teaching().preamble("train", {"config": config, "metric": spec.metric})
-        if self.gate(ctx, rounds_remaining=spec.max_rounds) == "stop":
+        result = self.gate(ctx, rounds_remaining=spec.max_rounds)
+        if result.decision == "stop":
             return None
+        if result.config != config:
+            project.write_json(cfg.CONFIG_FILE, result.config)
+        config = result.config
+        # The gate may have edited the config (e.g. lowered epochs to fit the budget), so
+        # this sentence -- and its epoch count -- is displayed only now, with the config
+        # the run will actually use.
+        ctx.display(
+            f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
+            f"metric curves as it goes, and saves the best model to `{checkpoint_path}`. "
+            f"`evaluate.py` then scores that model on the [[validation set]] and draws the "
+            f"{spec.metric} figures. Run both cells."
+        )
         # metrics.json/eval_val.json are derived outputs the cells regenerate; drop any
         # stale copy from an earlier run so it can't satisfy outputs_ready's mtime check
         # before the user has actually rerun train.py and evaluate.py this time.

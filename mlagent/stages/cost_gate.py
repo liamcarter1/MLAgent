@@ -10,6 +10,8 @@ tests must never read real hardware or shell out to a real training script.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from mlagent import config as cfg
 from mlagent import cost
 from mlagent.modality import modality_for
@@ -26,6 +28,18 @@ TIMING_TEXT = "Timing a short dry run..."
 NO_ESTIMATE_TEXT = "No estimate is available; the run can still proceed."
 STOP_TEXT = ("Change the config and run this cell again, or switch runtime, then run this "
              "cell again.")
+
+
+@dataclass(frozen=True)
+class GateResult:
+    """What the gate decided, and the config it finished with.
+
+    `config` is the config the gate estimated from, possibly edited by the user through
+    the "Edit the config first" path -- the caller (`TrainStage`/`TuneStage`) decides
+    whether and where to persist it; the gate itself never writes `config.json`.
+    """
+    decision: str          # "run" | "stop"
+    config: dict
 
 
 def price_and_currency(ctx, rates: dict) -> tuple[float, str]:
@@ -88,10 +102,18 @@ def _ask(ctx, *, allow_edit: bool, key: str | None) -> str:
     return "edit" if answer == EDIT_LABEL else "run"
 
 
-def gate(ctx, *, rounds_remaining: int, probes=None, dry_runner=cost.run_dry_run) -> str:
-    """`"run"` or `"stop"`. Displays the estimate and persists it to `cost.json`."""
+def gate(ctx, *, rounds_remaining: int, probes=None, dry_runner=cost.run_dry_run,
+         config: dict | None = None) -> GateResult:
+    """The decision plus the config the gate finished with.
+
+    `config` is the config to estimate; when None (the train stage path) it is read from
+    `config.json` as before. `TuneStage` passes the round's proposed config so the
+    estimate -- and any edit -- act on the config the round will actually train with,
+    not the stale one still on disk. Displays the estimate and persists it to
+    `cost.json`; never writes `config.json` itself.
+    """
     project = ctx.project
-    config = project.read_json(cfg.CONFIG_FILE)
+    config = dict(config) if config is not None else project.read_json(cfg.CONFIG_FILE)
     if not isinstance(config, dict) or not config.get("model_type"):
         raise RuntimeError("config.json not found; run the codegen stage first")
     spec = ctx.spec()
@@ -118,7 +140,8 @@ def gate(ctx, *, rounds_remaining: int, probes=None, dry_runner=cost.run_dry_run
             ctx.display(dry.error)
             ctx.display(NO_ESTIMATE_TEXT)
             _write_cost(project, last_estimate=None)
-            return _ask(ctx, allow_edit=False, key=DECISION_KEY)
+            return GateResult(decision=_ask(ctx, allow_edit=False, key=DECISION_KEY),
+                              config=config)
         estimate = cost.estimate_from_dry_run(dry, epochs, runtime, rates, price, currency,
                                               rounds)
 
@@ -132,13 +155,12 @@ def gate(ctx, *, rounds_remaining: int, probes=None, dry_runner=cost.run_dry_run
                                          basis_run_id=basis_run_id))
         _write_cost(project, last_estimate=estimate.to_dict())
         if runtime.device == "cpu" and not advice.over:
-            return "run"
+            return GateResult(decision="run", config=config)
         answer = _ask(ctx, allow_edit=edits < MAX_EDITS, key=key)
         if answer != "edit":
-            return answer
+            return GateResult(decision=answer, config=config)
         key = None
         config = edit_config(ctx.questioner, config, flat_schema, ctx.display)
-        project.write_json(cfg.CONFIG_FILE, config)
         epochs = int(config.get("epochs", epochs))
         # The per-batch cost did not change -- only schema keys did -- so the same
         # measured seconds_per_epoch is re-multiplied; no second dry run is ever launched.
@@ -148,4 +170,5 @@ def gate(ctx, *, rounds_remaining: int, probes=None, dry_runner=cost.run_dry_run
                     else cost.estimate_from_history(estimate.seconds_per_epoch, epochs,
                                                     runtime, rates, price, currency,
                                                     rounds))
-    return "run"   # unreachable: the last pass always returns from _ask
+    return GateResult(decision="run", config=config)  # unreachable: the last pass
+                                                       # always returns from _ask
