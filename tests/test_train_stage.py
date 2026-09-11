@@ -3,17 +3,39 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from functools import partial
 from pathlib import Path
 
-from mlagent import runlog
+import pytest
+
+from mlagent import cost, runlog
 from mlagent.llm import FakeLLM
 from mlagent.runs import archive_run, build_run_entry
+from mlagent.stages import cost_gate
 from mlagent.stages.base import Handoff, StageContext
 from mlagent.stages.codegen import CodegenStage
 from mlagent.stages.train import EVAL_VAL_FILE, TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
 
 SMALL = {"epochs": 3, "iters_per_epoch": 3, "early_stopping_patience": 0}
+
+
+def cpu_gate(seconds_per_epoch: float = 0.2):
+    """The real gate with no hardware probe and no subprocess dry run.
+
+    0.2 s/epoch over the fixture's 3 epochs is 0.012 minutes against a 5 minute budget,
+    so the gate is silent and asks nothing -- exactly the beginner-on-CPU path.
+    """
+    dry = cost.DryRunResult(device="cpu", gpu_name=None, batches_per_epoch=1,
+                            seconds_per_batch=seconds_per_epoch,
+                            seconds_per_epoch=seconds_per_epoch, n_train=168,
+                            script="train.py")
+    return partial(cost_gate.gate, probes=(), dry_runner=lambda project_dir, **kw: dry)
+
+
+def stopping_gate(ctx, *, rounds_remaining):
+    ctx.display(cost_gate.STOP_TEXT)
+    return "stop"
 
 
 def prepared(project):
@@ -25,6 +47,7 @@ def prepared(project):
     cfg = project.read_json("config.json")
     cfg.update(SMALL)
     project.write_json("config.json", cfg)
+    project.write_json("cost.json", {"price_per_unit": 0.0999, "currency": "$"})
     return project
 
 
@@ -34,6 +57,7 @@ def prepared_image(project):
                        questioner=ScriptedQuestioner(["Small CNN", "y"]),
                        explainer=None, display=lambda s: None)
     CodegenStage().prepare(ctx)
+    project.write_json("cost.json", {"price_per_unit": 0.0999, "currency": "$"})
     return project
 
 
@@ -64,14 +88,17 @@ def test_real_training_run_is_logged_archived_and_debriefed(clean_project):
         [("text", "Best [[validation accuracy]] beat the target.")],
     ])
     ctx, shown, figures = make_ctx(project, llm)
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     assert not stage.is_complete(ctx)
 
     handoff = stage.prepare(ctx)
     assert handoff == Handoff(stage="train", commands=[["train.py"], ["evaluate.py"]],
                               outputs=["metrics.json", "eval_val.json"])
     text = "\n".join(shown)
-    assert "cost" in text.lower() and "cpu" in text.lower()
+    assert "no [[compute unit]] cost gate" not in text
+    assert "This runtime has no [[GPU]]." in text
+    assert "A [[CPU]] runtime uses no [[compute unit]]s, so this run is free." in text
+    assert "Training runs on the [[CPU]] for tabular data." in text
     assert not stage.outputs_ready(ctx, handoff)
 
     run_cells(project, handoff)
@@ -102,7 +129,7 @@ def test_real_training_run_is_logged_archived_and_debriefed(clean_project):
 def test_a_second_run_is_logged_as_run_two(clean_project):
     project = prepared(clean_project)
     ctx, _shown, _figures = make_ctx(project)
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     run_cells(project, handoff)
     stage.debrief(ctx)
@@ -126,7 +153,7 @@ def test_a_second_run_is_logged_as_run_two(clean_project):
 def test_debriefing_twice_does_not_log_the_same_run_twice(clean_project):
     project = prepared(clean_project)
     ctx, shown, _figures = make_ctx(project)
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     run_cells(project, stage.prepare(ctx))
     stage.debrief(ctx)
     stage.debrief(ctx)
@@ -146,7 +173,7 @@ def test_failed_run_is_logged_and_the_stage_stays_incomplete(clean_project):
         "error": "ValueError: boom", "seconds": 0.2,
     })
     ctx, shown, _figures = make_ctx(project)
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     stage.debrief(ctx)
     assert not stage.is_complete(ctx)
     runs = runlog.read_runs(project.runs_path)
@@ -160,14 +187,14 @@ def test_failed_run_is_logged_and_the_stage_stays_incomplete(clean_project):
 def test_debrief_without_metrics_says_so(clean_project):
     project = prepared(clean_project)
     ctx, shown, _figures = make_ctx(project)
-    TrainStage().debrief(ctx)
+    TrainStage(gate=cpu_gate()).debrief(ctx)
     assert any("train.py" in s for s in shown)
 
 
 def test_prepare_without_a_config_raises(clean_project):
     ctx, _shown, _figures = make_ctx(clean_project)
     try:
-        TrainStage().prepare(ctx)
+        TrainStage(gate=cpu_gate()).prepare(ctx)
     except RuntimeError as exc:
         assert "codegen" in str(exc)
     else:
@@ -209,7 +236,7 @@ def test_archive_run_copies_curves_checkpoint_and_val_figures(project):
 def test_debrief_refuses_a_stale_eval_val_json(clean_project):
     project = prepared(clean_project)
     ctx, shown, figures = make_ctx(project)
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     run_cells(project, handoff)
     stage.debrief(ctx)
@@ -237,7 +264,7 @@ def test_debrief_refuses_a_stale_eval_val_json(clean_project):
 def test_narrative_headline_survives_a_non_numeric_target_value(clean_project):
     project = prepared(clean_project)
     ctx, _shown, _figures = make_ctx(project, FakeLLM([]))
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
 
     class FakeSpec:
         task_type = "tabular_classification"
@@ -260,7 +287,7 @@ def test_learning_level_reaches_the_debrief_prompt(clean_project):
         [("text", "done")],  # the debrief narrative
     ])
     ctx, _shown, _figures = make_ctx(project, llm)
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     run_cells(project, handoff)
     stage.debrief(ctx)
@@ -272,7 +299,7 @@ def test_learning_level_reaches_the_debrief_prompt(clean_project):
 def test_llm_failure_still_completes(clean_project):
     project = prepared(clean_project)
     ctx, shown, _figures = make_ctx(project, FakeLLM([]))
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     run_cells(project, stage.prepare(ctx))
     stage.debrief(ctx)
     assert stage.is_complete(ctx)
@@ -294,7 +321,7 @@ def test_the_preamble_names_the_image_checkpoint_and_the_tabular_one(tmp_path):
         write_clean_image_project(Project(tmp_path / "image_demo"))
     )
     ctx, shown, _figures = make_ctx(image_project)
-    TrainStage().prepare(ctx)
+    TrainStage(gate=cpu_gate()).prepare(ctx)
     joined = " ".join(shown)
     assert "checkpoints/best.pt" in joined
     assert "[[GPU]] if this runtime" in joined
@@ -303,7 +330,56 @@ def test_the_preamble_names_the_image_checkpoint_and_the_tabular_one(tmp_path):
         write_clean_project(Project(tmp_path / "tabular_demo"), "tabular_classification")
     )
     ctx, shown, _figures = make_ctx(tabular_project)
-    TrainStage().prepare(ctx)
+    TrainStage(gate=cpu_gate()).prepare(ctx)
     joined = " ".join(shown)
     assert "checkpoints/best.joblib" in joined
     assert "runs on the [[CPU]] for tabular data" in joined
+
+
+def test_the_gate_is_asked_for_every_remaining_tune_round(clean_project):
+    project = prepared(clean_project)
+    seen: list[int] = []
+
+    def recording_gate(ctx, *, rounds_remaining):
+        seen.append(rounds_remaining)
+        return "run"
+
+    ctx, _shown, _figures = make_ctx(project)
+    TrainStage(gate=recording_gate).prepare(ctx)
+    assert seen == [project.read_json("spec.json")["max_rounds"]]
+
+
+def test_a_cost_gate_stop_hands_off_nothing_and_touches_no_outputs(clean_project):
+    project = prepared(clean_project)
+    project.write_json("metrics.json", {"started_at": "earlier"})
+    ctx, shown, _figures = make_ctx(project)
+    stage = TrainStage(gate=stopping_gate)
+
+    assert stage.prepare(ctx) is None
+    assert cost_gate.STOP_TEXT in shown
+    # The stale metrics.json is left exactly as it was: nothing committed to a run.
+    assert project.read_json("metrics.json") == {"started_at": "earlier"}
+    assert not stage.is_complete(ctx)
+
+
+def test_the_debrief_compares_the_estimate_with_the_actual_time(clean_project):
+    project = prepared(clean_project)
+    ctx, shown, _figures = make_ctx(project)
+    stage = TrainStage(gate=cpu_gate())
+    run_cells(project, stage.prepare(ctx))
+    stage.debrief(ctx)
+    text = "\n".join(shown)
+    assert "Estimated 0.0 min, actual " in text
+    assert "min (" in text and ("% under)." in text or "% over)." in text)
+    entry = runlog.read_runs(project.runs_path)[0]
+    assert entry["estimated_minutes"] == pytest.approx(0.012)
+    assert entry["estimated_units"] == 0.0     # a CPU run spends none
+
+
+def test_the_debrief_omits_the_comparison_when_the_gate_made_no_estimate(clean_project):
+    project = prepared(clean_project)
+    ctx, shown, _figures = make_ctx(project)
+    stage = TrainStage(gate=lambda ctx, *, rounds_remaining: "run")   # never estimates
+    run_cells(project, stage.prepare(ctx))
+    stage.debrief(ctx)
+    assert "Estimated" not in "\n".join(shown)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from functools import partial
 
 import pytest
 
@@ -12,6 +13,7 @@ from mlagent.imageset import read_pair
 from mlagent.llm import FakeLLM
 from mlagent.orchestrator import Orchestrator
 from mlagent.runlog import read_runs
+from mlagent.stages import cost_gate
 from mlagent.stages.base import StageContext
 from mlagent.stages.clean import AUDIT_FILE, CLEAN_PY, CleanStage
 from mlagent.stages.codegen import CodegenStage
@@ -23,6 +25,8 @@ from mlagent.stages.tune import STOP_LABEL, TuneStage, apply_label
 from mlagent.ui.questions import ScriptedQuestioner
 
 pytest.importorskip("torch")
+
+E2E_GATE = partial(cost_gate.gate, probes=())
 
 FORM_ANSWERS = {
     "intake.goal": "Sort pictures of shapes into their kind",
@@ -42,6 +46,9 @@ FORM_ANSWERS = {
     "clean.train_fraction": 0.7,
     "clean.val_fraction": 0.15,
     "codegen.model_type": "Tiny CNN",
+    "train.price_per_unit": 0.0999,
+    "train.currency": "$",
+    "train.cost_decision": "Run it",
     "tune.action": STOP_LABEL,
 }
 ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "tune", "report"]
@@ -64,17 +71,18 @@ def cpu_only(monkeypatch):
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "-1"
 
 
-def make_orchestrator(project, questioner=None):
+def make_orchestrator(project, questioner=None, display=None):
     ctx = StageContext(
         project=project,
         llm=FakeLLM([]),  # empty script -> every call raises LLMError -> graceful fallback
         questioner=questioner or AutoApproveQuestioner([]),
         explainer=None,
-        display=lambda s: None,
+        display=display or (lambda s: None),
         display_figure=lambda path, caption="": None,
     )
     return Orchestrator(ctx, [IntakeStage(), DataStage(), CleanStage(), CodegenStage(),
-                              TrainStage(), TuneStage(), ReportStage()])
+                              TrainStage(gate=E2E_GATE), TuneStage(gate=E2E_GATE),
+                              ReportStage()])
 
 
 def small_config(project) -> None:
@@ -103,7 +111,8 @@ def advance_to_codegen(orch, project, answers) -> list[str]:
 
 
 def test_the_image_pipeline_runs_through_every_handoff(project, advance):
-    orch = make_orchestrator(project)
+    shown: list[str] = []
+    orch = make_orchestrator(project, display=shown.append)
     ran = advance_to_codegen(orch, project, FORM_ANSWERS)
     small_config(project)
     ran += advance(orch, project, answers=FORM_ANSWERS)
@@ -141,6 +150,13 @@ def test_the_image_pipeline_runs_through_every_handoff(project, advance):
     report = project.report_path.read_text(encoding="utf-8")
     assert "image_classification" in report
     assert "32" in report and "image" in report.lower()
+
+    text = "\n".join(shown)
+    assert "Timing a short dry run..." in text
+    assert "This runtime has no [[GPU]]." in text
+    assert "Estimated " in text and " min, actual " in text
+    stored = project.read_json("cost.json")["last_estimate"]
+    assert stored["basis"] == "dry_run" and stored["device"] == "cpu"
 
     # Deleting state.json: every stage is complete via its artifacts, so nothing reruns.
     (project.root / "state.json").unlink()

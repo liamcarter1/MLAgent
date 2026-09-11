@@ -3,15 +3,27 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from functools import partial
 from pathlib import Path
 
 from mlagent import config as cfg
+from mlagent import cost
 from mlagent.llm import FakeLLM
+from mlagent.stages import cost_gate
 from mlagent.stages.base import Handoff, StageContext
 from mlagent.stages.codegen import CodegenStage
 from mlagent.stages.report import EVAL_TEST_FILE, ReportStage, render_report
 from mlagent.stages.train import TrainStage
 from mlagent.ui.questions import ScriptedQuestioner
+
+
+def cpu_gate(seconds_per_epoch: float = 0.2):
+    """The real gate with no hardware probe and no subprocess dry run."""
+    dry = cost.DryRunResult(device="cpu", gpu_name=None, batches_per_epoch=1,
+                            seconds_per_batch=seconds_per_epoch,
+                            seconds_per_epoch=seconds_per_epoch, n_train=168,
+                            script="train.py")
+    return partial(cost_gate.gate, probes=(), dry_runner=lambda project_dir, **kw: dry)
 
 
 def run_cells(project, handoff):
@@ -31,7 +43,8 @@ def trained(project):
     config = project.read_json("config.json")
     config.update({"epochs": 2, "iters_per_epoch": 3, "early_stopping_patience": 0})
     project.write_json("config.json", config)
-    stage = TrainStage()
+    project.write_json("cost.json", {"price_per_unit": 0.0999, "currency": "$"})
+    stage = TrainStage(gate=cpu_gate())
     run_cells(project, stage.prepare(ctx))
     stage.debrief(ctx)
     assert stage.is_complete(ctx)

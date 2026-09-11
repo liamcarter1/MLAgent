@@ -7,7 +7,8 @@ from pathlib import Path
 from mlagent import config as cfg
 from mlagent.modality import modality_for
 from mlagent.runlog import read_runs
-from mlagent.runs import EVAL_VAL_FILE, log_finished_run, run_problem
+from mlagent.runs import EVAL_VAL_FILE, estimate_vs_actual, log_finished_run, run_problem
+from mlagent.stages import cost_gate
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.templates_io import CODE_FILES
 
@@ -25,6 +26,11 @@ def _fmt(value) -> str:
 class TrainStage(ScriptStageBase):
     name = "train"
 
+    def __init__(self, gate=cost_gate.gate):
+        # Injectable the way `DataStage` takes `hf_load`: tests must never read real
+        # hardware or shell out to a real training script.
+        self.gate = gate
+
     def is_complete(self, ctx: StageContext) -> bool:
         runs = read_runs(ctx.project.runs_path)
         if not any(r.get("status") == "done" for r in runs):
@@ -35,7 +41,7 @@ class TrainStage(ScriptStageBase):
             return True
         return any(r.get("started_at") == started for r in runs)
 
-    def prepare(self, ctx: StageContext) -> Handoff:
+    def prepare(self, ctx: StageContext) -> Handoff | None:
         project = ctx.project
         config = project.read_json(cfg.CONFIG_FILE)
         if not isinstance(config, dict) or not all((project.root / f).exists() for f in CODE_FILES):
@@ -45,8 +51,7 @@ class TrainStage(ScriptStageBase):
         if modality.name == "image":
             device_sentence = (
                 "Training picks its [[device]] at run time -- the [[GPU]] if this runtime "
-                "has one, otherwise the [[CPU]] -- so there is no [[compute unit]] cost gate "
-                "for this run."
+                "has one, otherwise the [[CPU]]."
             )
             checkpoint_sentence = (
                 f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
@@ -54,10 +59,7 @@ class TrainStage(ScriptStageBase):
                 "`checkpoints/best.pt`."
             )
         else:
-            device_sentence = (
-                "Training runs on the [[CPU]] for tabular data, so there is no "
-                "[[compute unit]] cost gate for this run."
-            )
+            device_sentence = "Training runs on the [[CPU]] for tabular data."
             checkpoint_sentence = (
                 f"`train.py` runs {config.get('epochs')} [[epoch]]s, redrawing the loss and "
                 "metric curves as it goes, and saves the best model to "
@@ -68,6 +70,8 @@ class TrainStage(ScriptStageBase):
             f"on the [[validation set]] and draws the {spec.metric} figures. Run both cells."
         )
         ctx.teaching().preamble("train", {"config": config, "metric": spec.metric})
+        if self.gate(ctx, rounds_remaining=spec.max_rounds) == "stop":
+            return None
         # metrics.json/eval_val.json are derived outputs the cells regenerate; drop any
         # stale copy from an earlier run so it can't satisfy outputs_ready's mtime check
         # before the user has actually rerun train.py and evaluate.py this time.
@@ -127,5 +131,8 @@ class TrainStage(ScriptStageBase):
             "Look at the [[loss]] curves: if validation loss rises while training loss "
             "keeps falling, the model is [[overfitting]]."
         )
+        comparison = estimate_vs_actual(entry)
+        if comparison:
+            headline += " " + comparison
         narrative = ctx.teaching().debrief("train", summary, figures, fallback=fallback)
         return headline + "\n\n" + narrative

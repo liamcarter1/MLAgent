@@ -29,11 +29,13 @@ from mlagent.runlog import best_run, is_better, read_runs, summarise
 from mlagent.runs import (
     EVAL_VAL_FILE,
     archive_metrics,
+    estimate_vs_actual,
     log_finished_run,
     read_run_metrics,
     run_problem,
 )
 from mlagent.spec import Spec
+from mlagent.stages import cost_gate
 from mlagent.stages.base import Handoff, ScriptStageBase, StageContext
 from mlagent.teaching import EXPERT, material
 from mlagent.templates_io import (
@@ -218,6 +220,9 @@ def proposal_table(diff: dict, schema: dict) -> str:
 class TuneStage(ScriptStageBase):
     name = "tune"
 
+    def __init__(self, gate=cost_gate.gate):
+        self.gate = gate
+
     # --- lifecycle -----------------------------------------------------------------------
     def is_complete(self, ctx: StageContext) -> bool:
         state = ctx.project.read_json(cfg.TUNE_STATE_FILE)
@@ -294,6 +299,11 @@ class TuneStage(ScriptStageBase):
             ctx.display(DECISION_TEXT["stopped"])
             return None
         new_config, diff, reason = chosen
+        if self.gate(ctx, rounds_remaining=state["max_rounds"] - round_no) == "stop":
+            # Not a tuning decision: `decision` stays "continue" so the next orch.run()
+            # diagnoses and proposes again. Nothing was written yet, so config.json and
+            # tune_state.json are already untouched -- nothing to restore.
+            return None
         project.write_json(cfg.CONFIG_FILE, new_config)
         state["pending"] = {
             "round": round_no,
@@ -490,8 +500,12 @@ class TuneStage(ScriptStageBase):
         narrative = ctx.teaching().debrief("tune_debrief", payload, figures, fallback=fallback)
         round_after = int(pending.get("round") or state["round"] + 1)
         more_rounds = round_after < state["max_rounds"]
-        ctx.display(self._headline(spec, entry, previous_best, improved, more_rounds=more_rounds)
-                    + "\n\n" + narrative)
+        headline = self._headline(spec, entry, previous_best, improved,
+                                  more_rounds=more_rounds)
+        comparison = estimate_vs_actual(entry)
+        if comparison:
+            headline += " " + comparison
+        ctx.display(headline + "\n\n" + narrative)
 
         state["round"] = round_after
         # `log_finished_run` returns the existing entry (`new=False`) when this run was

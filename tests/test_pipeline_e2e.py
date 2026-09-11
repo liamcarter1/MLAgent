@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 
 import pandas as pd
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from mlagent.llm import FakeLLM
 from mlagent.orchestrator import Orchestrator
 from mlagent.runlog import read_runs
+from mlagent.stages import cost_gate
 from mlagent.stages.base import StageContext
 from mlagent.stages.clean import AUDIT_FILE, CLEAN_FILE, CLEAN_PY, CleanStage
 from mlagent.stages.codegen import CodegenStage
@@ -19,6 +21,8 @@ from mlagent.stages.report import ReportStage
 from mlagent.stages.train import TrainStage
 from mlagent.stages.tune import STOP_LABEL, TuneStage, apply_label
 from mlagent.ui.questions import ScriptedQuestioner
+
+E2E_GATE = partial(cost_gate.gate, probes=())
 
 FORM_ANSWERS = {
     "intake.goal": "Predict churn from account data",
@@ -40,6 +44,9 @@ FORM_ANSWERS = {
     "clean.train_fraction": 0.7,
     "clean.val_fraction": 0.15,
     "codegen.model_type": "Gradient boosting",
+    "train.price_per_unit": 0.0999,
+    "train.currency": "$",
+    "train.cost_decision": "Run it",
     "tune.action": STOP_LABEL,
 }
 ALL_STAGES = ["intake", "data", "clean", "codegen", "train", "tune", "report"]
@@ -55,17 +62,17 @@ class AutoApproveQuestioner(ScriptedQuestioner):
         return True
 
 
-def make_orchestrator(project, stages=None, questioner=None):
+def make_orchestrator(project, stages=None, questioner=None, display=None):
     ctx = StageContext(
         project=project,
         llm=FakeLLM([]),  # empty script -> every call raises LLMError -> graceful fallback
         questioner=questioner or AutoApproveQuestioner([]),
         explainer=None,
-        display=lambda s: None,
+        display=display or (lambda s: None),
         display_figure=lambda path, caption="": None,
     )
     stages = stages or [IntakeStage(), DataStage(), CleanStage(), CodegenStage(),
-                        TrainStage(), TuneStage(), ReportStage()]
+                        TrainStage(gate=E2E_GATE), TuneStage(gate=E2E_GATE), ReportStage()]
     return Orchestrator(ctx, stages)
 
 
@@ -173,3 +180,21 @@ def test_one_guided_round_then_stop_and_the_report_scores_the_new_best(project, 
     best = max(runs, key=lambda r: r["best_val_metric"])
     assert project.read_json("report_meta.json")["best_run"] == best["run_id"]
     assert project.read_json("eval_test.json")["run_id"] == best["run_id"]
+
+
+def test_the_gate_estimates_before_training_and_the_debrief_compares_afterwards(
+        project, advance):
+    shown: list[str] = []
+    orch = make_orchestrator(project, display=shown.append)
+    assert advance(orch, project, answers=FORM_ANSWERS) == ALL_STAGES
+    text = "\n".join(shown)
+    assert "Timing a short dry run..." in text
+    assert "| minutes | [[compute units]] | cost |" in text
+    assert "A [[CPU]] runtime uses no [[compute unit]]s, so this run is free." in text
+    assert "Estimated " in text and " min, actual " in text
+    record = project.read_json("cost.json")
+    assert record["price_per_unit"] == pytest.approx(0.0999)
+    assert record["currency"] == "$"
+    assert record["last_estimate"]["basis"] == "dry_run"
+    assert project.read_json("runs/run1_metrics.json")["seconds_per_epoch"] > 0
+    assert read_runs(project.runs_path)[0]["estimated_minutes"] is not None

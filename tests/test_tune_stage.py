@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from functools import partial
 from pathlib import Path
 
-from mlagent import runlog
+from mlagent import cost, runlog
 from mlagent.diagnose import Diagnosis
 from mlagent.llm import FakeLLM
+from mlagent.stages import cost_gate
 from mlagent.stages.base import Handoff, StageContext
 from mlagent.stages.codegen import CodegenStage
 from mlagent.stages.train import TrainStage
@@ -21,6 +23,15 @@ from mlagent.stages.tune import (
     load_tune_state,
 )
 from mlagent.ui.questions import FormQuestioner, ScriptedQuestioner
+
+
+def cpu_gate(seconds_per_epoch: float = 0.2):
+    dry = cost.DryRunResult(device="cpu", gpu_name=None, batches_per_epoch=1,
+                            seconds_per_batch=seconds_per_epoch,
+                            seconds_per_epoch=seconds_per_epoch, n_train=168,
+                            script="train.py")
+    return partial(cost_gate.gate, probes=(), dry_runner=lambda project_dir, **kw: dry)
+
 
 FAILED_METRICS = {
     "status": "failed", "started_at": "2026-09-10T09:00:00.000000+00:00",
@@ -65,8 +76,9 @@ def with_run_one(project, target=2.0):
     spec = project.read_json("spec.json")
     spec["target_value"] = target
     project.write_json("spec.json", spec)
+    project.write_json("cost.json", {"price_per_unit": 0.0999, "currency": "$"})
     ctx, _s, _f = make_ctx(project)
-    stage = TrainStage()
+    stage = TrainStage(gate=cpu_gate())
     run_cells(project, stage.prepare(ctx))
     stage.debrief(ctx)
     assert len(runlog.read_runs(project.runs_path)) == 1
@@ -105,7 +117,7 @@ def test_a_guided_round_applies_the_proposal_and_logs_run_two(clean_project):
         [],
     ])
     ctx, shown, figures = make_ctx(project, llm, answers=[apply_label(1)])
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     assert not stage.is_complete(ctx)
 
     handoff = stage.prepare(ctx)
@@ -161,7 +173,7 @@ def test_a_guided_round_applies_the_proposal_and_logs_run_two(clean_project):
 def test_stop_ends_the_loop_with_a_heuristic_when_the_llm_is_down(clean_project):
     project = with_run_one(clean_project)
     ctx, shown, _f = make_ctx(project, answers=[STOP_LABEL])  # FakeLLM([]) -> LLMError
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     assert stage.prepare(ctx) is None
     text = "\n".join(shown)
     assert "Proposal 1" in text  # the heuristic still produced one
@@ -178,7 +190,7 @@ def test_heuristic_proposal_is_applied_when_the_llm_is_down(clean_project):
     project = with_run_one(clean_project)
     before = project.read_json("config.json")
     ctx, _shown, _f = make_ctx(project, answers=[apply_label(1)])
-    handoff = TuneStage().prepare(ctx)
+    handoff = TuneStage(gate=cpu_gate()).prepare(ctx)
     assert handoff is not None
     after = project.read_json("config.json")
     assert after != before and after["model_type"] == "gradient_boosting"
@@ -188,7 +200,7 @@ def test_heuristic_proposal_is_applied_when_the_llm_is_down(clean_project):
 def test_target_met_ends_the_loop_without_asking(clean_project):
     project = with_run_one(clean_project, target=0.0)  # any accuracy meets 0.0
     ctx, shown, _f = make_ctx(project)  # no scripted answers: a question would raise
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     assert stage.prepare(ctx) is None
     assert project.read_json("tune_state.json")["decision"] == "target_met"
     assert "target" in "\n".join(shown).lower()
@@ -202,7 +214,7 @@ def test_rounds_exhausted_after_the_last_allowed_round(clean_project):
     project.write_json("spec.json", spec)
     llm = FakeLLM([[("text", "pre")], *one_proposal({"epochs": 4})])
     ctx, shown, _f = make_ctx(project, llm, answers=[apply_label(1)])
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     run_cells(project, handoff)
     assert stage.debrief(ctx) is None  # debrief narrative falls back (script exhausted)
@@ -217,7 +229,7 @@ def test_edit_path_changes_the_proposal_before_applying(clean_project):
     llm = FakeLLM([[("text", "pre")], *one_proposal({"learning_rate": 0.05})])
     ctx, shown, _f = make_ctx(project, llm,
                               answers=[EDIT_LABEL, "epochs = 3", "2", "Done"])
-    handoff = TuneStage().prepare(ctx)
+    handoff = TuneStage(gate=cpu_gate()).prepare(ctx)
     assert handoff is not None
     config = project.read_json("config.json")
     assert config["learning_rate"] == 0.05 and config["epochs"] == 2
@@ -239,7 +251,7 @@ def test_three_proposals_are_ranked_and_the_second_can_be_chosen(clean_project):
          "expected": "steadier"},
     ]})], []])
     ctx, shown, _f = make_ctx(project, llm, answers=[apply_label(2)])
-    TuneStage().prepare(ctx)
+    TuneStage(gate=cpu_gate()).prepare(ctx)
     text = "\n".join(shown)
     assert text.index("rank-one") < text.index("rank-two") < text.index("rank-four")
     assert "no-op" not in text  # coerced to no change -> dropped
@@ -251,7 +263,7 @@ def test_family_switch_produces_a_valid_config_and_a_run(clean_project):
     llm = FakeLLM([[("text", "pre")],
                    *one_proposal({"model_type": "random_forest"}, reason="Forest time.")])
     ctx, shown, _f = make_ctx(project, llm, answers=[apply_label(1)])
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     config = project.read_json("config.json")
     assert config["model_type"] == "random_forest" and "trees_per_epoch" in config
@@ -267,14 +279,14 @@ def test_family_switch_produces_a_valid_config_and_a_run(clean_project):
 def test_debrief_without_a_pending_round_does_nothing(clean_project):
     project = with_run_one(clean_project)
     ctx, shown, _f = make_ctx(project)
-    assert TuneStage().debrief(ctx) is None
+    assert TuneStage(gate=cpu_gate()).debrief(ctx) is None
     assert shown == [] and not project.exists("tune_state.json")
 
 
 def test_debrief_before_the_cells_ran_explains_and_waits(clean_project):
     project = with_run_one(clean_project)
     ctx, _s, _f = make_ctx(project, answers=[apply_label(1)])
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     stage.prepare(ctx)  # unlinks metrics.json
     ctx2, shown, _f = make_ctx(project)
     assert stage.debrief(ctx2) is None
@@ -287,7 +299,7 @@ def test_on_reset_forgets_the_loop(clean_project):
     project.write_json("tune_state.json", {"round": 2, "max_rounds": 3, "decision": "stopped",
                                            "pending": None, "history": []})
     ctx, _s, _f = make_ctx(project)
-    TuneStage().on_reset(ctx)
+    TuneStage(gate=cpu_gate()).on_reset(ctx)
     assert not project.exists("tune_state.json")
 
 
@@ -298,7 +310,7 @@ def test_expert_level_skips_preamble_and_primer(clean_project):
     project.write_json("spec.json", spec)
     llm = FakeLLM([*one_proposal({"epochs": 4})])  # no preamble turn
     ctx, shown, _f = make_ctx(project, llm, answers=[STOP_LABEL])
-    TuneStage().prepare(ctx)
+    TuneStage(gate=cpu_gate()).prepare(ctx)
     assert "What each family's knobs do" not in "\n".join(shown)
     assert len(llm.calls) == 1
 
@@ -319,7 +331,7 @@ def test_debriefing_the_same_round_twice_logs_one_history_entry(clean_project):
         [],
     ])
     ctx, _shown, _f = make_ctx(project, llm, answers=[apply_label(1)])
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     pending = project.read_json("tune_state.json")["pending"]
     assert pending is not None
@@ -363,7 +375,7 @@ def test_a_stale_form_answer_does_not_block_stopping_after_a_no_op_edit(clean_pr
     questioner = FormQuestioner({"tune.action": EDIT_LABEL}, fallback=fallback)
     ctx, shown, _f = make_ctx(project, llm)
     ctx.questioner = questioner
-    assert TuneStage().prepare(ctx) is None
+    assert TuneStage(gate=cpu_gate()).prepare(ctx) is None
     assert project.read_json("tune_state.json")["decision"] == "stopped"
     assert project.read_json("config.json")["learning_rate"] == 0.1  # nothing applied
 
@@ -372,7 +384,7 @@ def test_prepare_backfills_a_legacy_run_archive(clean_project):
     project = with_run_one(clean_project)
     (project.runs_dir / "run1_metrics.json").unlink()
     ctx, shown, _f = make_ctx(project, answers=[STOP_LABEL])
-    TuneStage().prepare(ctx)
+    TuneStage(gate=cpu_gate()).prepare(ctx)
     assert (project.runs_dir / "run1_metrics.json").exists()
     assert project.read_json("runs/run1_metrics.json") == project.read_json("metrics.json")
     assert "no per-epoch curve" not in "\n".join(shown)
@@ -390,7 +402,7 @@ def test_unknown_decision_is_treated_as_continue(clean_project):
     project.write_json("tune_state.json", {"round": 1, "max_rounds": 3, "decision": "bogus",
                                            "pending": None, "history": []})
     ctx, _s, _f = make_ctx(project)
-    assert TuneStage().is_complete(ctx) is False
+    assert TuneStage(gate=cpu_gate()).is_complete(ctx) is False
     assert load_tune_state(project, 3)["decision"] == "continue"
 
 
@@ -399,7 +411,7 @@ def test_a_failed_run_is_logged_with_its_diff_and_the_next_round_proposes_a_gent
 ):
     project = with_run_one(clean_project)
     ctx, _s, _f = make_ctx(project, answers=[apply_label(1)])
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     assert handoff is not None
     config = project.read_json("config.json")
@@ -430,7 +442,7 @@ def test_failed_run_headline_says_last_round_when_no_rounds_remain(clean_project
     spec["max_rounds"] = 1
     project.write_json("spec.json", spec)
     ctx, _s, _f = make_ctx(project, answers=[apply_label(1)])
-    stage = TuneStage()
+    stage = TuneStage(gate=cpu_gate())
     handoff = stage.prepare(ctx)
     assert handoff is not None
     config = project.read_json("config.json")
@@ -452,5 +464,50 @@ def test_debrief_with_a_finished_round_and_no_pending_asks_to_re_prepare(clean_p
                      "improved": False}],
     })
     ctx, shown, _f = make_ctx(project)
-    assert TuneStage().debrief(ctx) is True
+    assert TuneStage(gate=cpu_gate()).debrief(ctx) is True
     assert shown == []
+
+
+def test_a_cost_gate_stop_leaves_config_and_pending_untouched(clean_project):
+    """The gate runs before `config.json` or `pending` are written (ruling 7, amended), so
+    a stop here leaves both exactly as they were before this `prepare` call -- there is
+    nothing to restore, and a cost stop is not a tuning decision."""
+    project = with_run_one(clean_project)
+    before_config = project.read_json("config.json")
+    ctx, shown, _figures = make_ctx(project, answers=[apply_label(1)])
+
+    def stopping_gate(ctx, *, rounds_remaining):
+        ctx.display(cost_gate.STOP_TEXT)
+        return "stop"
+
+    assert TuneStage(gate=stopping_gate).prepare(ctx) is None
+    assert cost_gate.STOP_TEXT in shown
+    assert project.read_json("config.json") == before_config
+    state = project.read_json("tune_state.json")
+    assert (state or {}).get("pending") is None      # unchanged from before this call
+    assert not TuneStage(gate=cpu_gate()).is_complete(ctx)
+
+
+def test_the_gate_is_asked_for_the_rounds_that_are_left(clean_project):
+    project = with_run_one(clean_project)
+    seen: list[int] = []
+
+    def recording_gate(ctx, *, rounds_remaining):
+        seen.append(rounds_remaining)
+        return "run"
+
+    ctx, _shown, _figures = make_ctx(project, answers=[apply_label(1)])
+    TuneStage(gate=recording_gate).prepare(ctx)
+    # max_rounds is 3 in the fixture spec and this is round 1, so two rounds remain.
+    assert seen == [2]
+
+
+def test_the_tune_debrief_shows_the_estimate_vs_actual_line(clean_project):
+    project = with_run_one(clean_project)
+    ctx, shown, _figures = make_ctx(project, answers=[apply_label(1)])
+    stage = TuneStage(gate=cpu_gate())
+    handoff = stage.prepare(ctx)
+    assert handoff is not None
+    run_cells(project, handoff)
+    stage.debrief(ctx)
+    assert "Estimated 0.0 min, actual " in "\n".join(shown)
