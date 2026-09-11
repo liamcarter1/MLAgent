@@ -200,4 +200,12 @@ def test_estimate_vs_actual_is_omitted_when_there_is_no_estimate():
     assert runs.estimate_vs_actual({"estimated_minutes": None, "seconds": 60.0}) is None
     assert runs.estimate_vs_actual({"seconds": 60.0}) is None
     assert runs.estimate_vs_actual({"estimated_minutes": 3.0, "seconds": None}) is None
-    assert runs.estimate_vs_actual({"estimated_minutes": 0, "seconds": 60.0}) is None
+
+
+def test_estimate_vs_actual_handles_a_zero_minute_estimate():
+    # A fast dry run on a tiny dataset can round `minutes` to exactly 0.0; per the design
+    # spec the line is omitted only when `estimated_minutes is None`, not when it is 0.
+    assert runs.estimate_vs_actual({"estimated_minutes": 0.0, "seconds": 0.84}) == (
+        "Estimated 0.0 min, actual 0.0 min (100% over).")
+    assert runs.estimate_vs_actual({"estimated_minutes": 0, "seconds": 0.0}) == (
+        "Estimated 0.0 min, actual 0.0 min (0% under).")

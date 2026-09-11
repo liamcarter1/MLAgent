@@ -68,16 +68,21 @@ def estimate_vs_actual(entry: dict) -> str | None:
     """`"Estimated 3.1 min, actual 2.7 min (13% under)."`, or None with no estimate.
 
     Fixed text, built without an LLM call, and omitted entirely rather than showing a
-    placeholder when the gate had no estimate to make.
+    placeholder when the gate had no estimate to make (`estimated_minutes is None`, per
+    the design spec) -- not when the estimate itself happens to round to 0.0 minutes, which
+    a fast dry run on a tiny dataset can legitimately produce.
     """
     estimated = entry.get("estimated_minutes")
     seconds = entry.get("seconds")
-    if not isinstance(estimated, int | float) or not estimated:
+    if estimated is None or not isinstance(estimated, int | float):
         return None
     if not isinstance(seconds, int | float):
         return None
     actual = float(seconds) / 60.0
-    percent = round(abs(actual - estimated) / float(estimated) * 100)
+    # A zero-minute estimate would divide by zero; fall back to the actual minutes (or 1.0
+    # when both are zero) so the percentage stays a plain "how far off" figure.
+    basis = float(estimated) or actual or 1.0
+    percent = round(abs(actual - estimated) / basis * 100)
     direction = "over" if actual > estimated else "under"
     return (f"Estimated {float(estimated):.1f} min, actual {actual:.1f} min "
             f"({percent}% {direction}).")
