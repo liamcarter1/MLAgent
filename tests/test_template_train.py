@@ -36,6 +36,14 @@ SMALL = {"model_type": "gradient_boosting", "epochs": 4, "iters_per_epoch": 3,
          "l2_regularization": 0.0}
 
 
+def test_tabular_train_records_its_checkpoint_path(clean_project):
+    root = install(clean_project, SMALL)
+    proc = run(root)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    metrics = json.loads((root / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["checkpoint"] == "checkpoints/best.joblib"
+
+
 def test_classification_run_writes_metrics_checkpoint_and_eval(clean_project):
     root = install(clean_project, SMALL)
     proc = run(root)
